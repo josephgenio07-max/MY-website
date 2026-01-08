@@ -18,9 +18,12 @@
         "name": "next"
       }
     ],
-    "paths": {
-      "@/*": ["./*"]
-    }
+    "baseUrl": ".",
+"paths": {
+  "@/*": ["src/*"]
+}
+
+    
   },
   "include": [
     "next-env.d.ts",
@@ -29,6 +32,6 @@
     ".next/types/**/*.ts",
     ".next/dev/types/**/*.ts",
     "**/*.mts"
-  ],
+, "app/join/page.tsx.backup"  ],
   "exclude": ["node_modules"]
 }
