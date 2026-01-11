@@ -91,7 +91,7 @@ export async function POST(req: Request) {
 
   const { data: membership, error } = await admin
     .from("memberships")
-    .select("id, team_id, player_id, players(id, name, email, phone_e164, reminder_consent)")
+    .select("id, team_id, player_id, next_due_date, players(id, name, email, phone_e164, reminder_consent)")
     .eq("id", membershipId)
     .eq("team_id", teamId)
     .maybeSingle();
@@ -110,7 +110,7 @@ export async function POST(req: Request) {
 
   const { data: team } = await admin
     .from("teams")
-    .select("name, manager_id")
+    .select("name, manager_id, weekly_amount")
     .eq("id", teamId)
     .single();
 
@@ -118,7 +118,18 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Not allowed" }, { status: 403 });
   }
 
-  const msgBody = message || `Reminder from ${team.name}: your payment is due.`;
+  // UPDATED: Generate payment link
+  const paymentLink = `${process.env.NEXT_PUBLIC_BASE_URL}/pay/${membershipId}`;
+  
+  // UPDATED: Format due date and amount
+  const amount = team?.weekly_amount || 5;
+  const dueDate = membership.next_due_date 
+    ? new Date(membership.next_due_date).toLocaleDateString('en-GB')
+    : 'soon';
+
+  // UPDATED: Include payment link in message
+  const msgBody = message || 
+    `Hi ${player.name}, your payment for ${team.name} is due.\n\nAmount: £${amount}\nDue: ${dueDate}\n\nPay here: ${paymentLink}`;
 
   const { data: canSend } = await admin.rpc("can_send_reminder", {
     p_membership_id: membershipId,
