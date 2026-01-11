@@ -20,7 +20,9 @@ export default function SendSingleReminderButton({
   const [msg, setMsg] = useState("");
 
   useEffect(() => {
-    setMsg(`Hi${playerName ? ` ${playerName}` : ""} — quick reminder your payment is due. Thanks!`);
+    // Default message - manager can customize this
+    // Payment link will be added automatically by the API
+    setMsg(`Hi${playerName ? ` ${playerName}` : ""}, quick reminder your payment is due. Thanks!`);
   }, [playerName]);
 
   const hardDisabled = useMemo(() => {
@@ -51,11 +53,11 @@ export default function SendSingleReminderButton({
         body: JSON.stringify({
           teamId,
           membershipId,
-          message: msg,
+          // Send the custom message - API will add payment link below it
+          message: msg.trim(),
         }),
       });
 
-      // Check content type before parsing
       const contentType = res.headers.get("content-type");
       
       if (!contentType || !contentType.includes("application/json")) {
@@ -109,7 +111,9 @@ export default function SendSingleReminderButton({
             <div className="flex items-start justify-between gap-4">
               <div>
                 <h3 className="text-lg font-semibold text-gray-900">Send reminder</h3>
-                <p className="mt-1 text-sm text-gray-500">Sends only to this player (cooldown enforced).</p>
+                <p className="mt-1 text-sm text-gray-500">
+                  Customize your message. Payment link will be added automatically.
+                </p>
               </div>
 
               <button
@@ -120,12 +124,21 @@ export default function SendSingleReminderButton({
               </button>
             </div>
 
-            <textarea
-              className="mt-4 w-full rounded-lg border border-gray-300 p-3 text-sm outline-none focus:ring-2 focus:ring-gray-900"
-              rows={6}
-              value={msg}
-              onChange={(e) => setMsg(e.target.value)}
-            />
+            <div className="mt-4">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Your message
+              </label>
+              <textarea
+                className="w-full rounded-lg border border-gray-300 p-3 text-sm outline-none focus:ring-2 focus:ring-gray-900"
+                rows={4}
+                value={msg}
+                onChange={(e) => setMsg(e.target.value)}
+                placeholder="Enter your custom message..."
+              />
+              <p className="mt-2 text-xs text-gray-500">
+                💡 Payment details and link will be automatically added below your message
+              </p>
+            </div>
 
             {result && <p className="mt-3 text-sm text-gray-700">{result}</p>}
 

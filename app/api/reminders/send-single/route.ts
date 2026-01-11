@@ -118,18 +118,25 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Not allowed" }, { status: 403 });
   }
 
-  // UPDATED: Generate payment link
+  // Generate payment link
   const paymentLink = `${process.env.NEXT_PUBLIC_BASE_URL}/pay/${membershipId}`;
   
-  // UPDATED: Format due date and amount
+  // Format due date and amount
   const amount = team?.weekly_amount || 5;
   const dueDate = membership.next_due_date 
     ? new Date(membership.next_due_date).toLocaleDateString('en-GB')
     : 'soon';
 
-  // UPDATED: Include payment link in message
-  const msgBody = message || 
-    `Hi ${player.name}, your payment for ${team.name} is due.\n\nAmount: £${amount}\nDue: ${dueDate}\n\nPay here: ${paymentLink}`;
+  // If manager sends custom message, append payment info below it
+  // If no custom message, use default with payment info
+  let msgBody;
+  if (message && message.trim()) {
+    // Manager's custom message + payment info below
+    msgBody = `${message.trim()}\n\n---\nAmount: £${amount}\nDue: ${dueDate}\n\nPay here: ${paymentLink}`;
+  } else {
+    // Default message with payment info
+    msgBody = `Hi ${player.name}, your payment for ${team.name} is due.\n\nAmount: £${amount}\nDue: ${dueDate}\n\nPay here: ${paymentLink}`;
+  }
 
   const { data: canSend } = await admin.rpc("can_send_reminder", {
     p_membership_id: membershipId,

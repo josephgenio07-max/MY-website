@@ -60,7 +60,8 @@ export default function SendBulkReminderButton({
         },
         body: JSON.stringify({
           teamId,
-          message: msg,
+          // Send the custom message - API will add payment link below it
+          message: msg.trim(),
           kind: "manual",
           target,
         }),
@@ -96,11 +97,13 @@ export default function SendBulkReminderButton({
           <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-xl">
             <div className="flex items-start justify-between gap-4">
               <div>
-                <h3 className="text-lg font-semibold text-gray-900">Send reminder</h3>
+                <h3 className="text-lg font-semibold text-gray-900">Send bulk reminder</h3>
                 <p className="mt-1 text-sm text-gray-500">
                   {mode === "unpaid"
-                    ? "Sends only to players who are due/overdue."
-                    : "Sends only to active players with a due date coming soon."}
+                    ? "Sends to players who are due/overdue."
+                    : "Sends to active players with a due date coming soon."}
+                  <br />
+                  <span className="text-gray-600">Payment link will be added automatically.</span>
                 </p>
               </div>
 
@@ -126,12 +129,21 @@ export default function SendBulkReminderButton({
               </div>
             )}
 
-            <textarea
-              className="mt-4 w-full rounded-lg border border-gray-300 p-3 text-sm outline-none focus:ring-2 focus:ring-gray-900"
-              rows={6}
-              value={msg}
-              onChange={(e) => setMsg(e.target.value)}
-            />
+            <div className="mt-4">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Your message
+              </label>
+              <textarea
+                className="w-full rounded-lg border border-gray-300 p-3 text-sm outline-none focus:ring-2 focus:ring-gray-900"
+                rows={4}
+                value={msg}
+                onChange={(e) => setMsg(e.target.value)}
+                placeholder="Enter your custom message..."
+              />
+              <p className="mt-2 text-xs text-gray-500">
+                💡 Payment details and link will be automatically added below your message
+              </p>
+            </div>
 
             {result && <p className="mt-3 text-sm text-gray-700">{result}</p>}
 

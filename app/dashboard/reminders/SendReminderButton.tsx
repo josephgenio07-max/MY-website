@@ -55,6 +55,7 @@ export default function SendReminderButton(props: {
 
           startTransition(async () => {
             try {
+              // Don't pass message - let API generate it with payment link
               await sendReminder({
                 teamId: props.teamId,
                 membershipId: props.membershipId,

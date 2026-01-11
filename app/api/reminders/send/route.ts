@@ -168,18 +168,24 @@ export async function POST(req: Request) {
       continue;
     }
 
-    // UPDATED: Generate payment link for this membership
+    // Generate payment link for this membership
     const paymentLink = `${process.env.NEXT_PUBLIC_BASE_URL}/pay/${membershipId}`;
     
-    // UPDATED: Format amount and due date
+    // Format amount and due date
     const amount = teamRow.weekly_amount || 5;
     const dueDate = m.next_due_date 
       ? new Date(m.next_due_date).toLocaleDateString('en-GB')
       : 'soon';
 
-    // UPDATED: Include payment link in message
-    const msgBody = message || 
-      `Hi ${player.name}, your payment for ${teamRow.name} is due.\n\nAmount: £${amount}\nDue: ${dueDate}\n\nPay here: ${paymentLink}`;
+    // If manager sends custom message, append payment info below it
+    let msgBody;
+    if (message && message.trim()) {
+      // Manager's custom message + payment info below
+      msgBody = `${message.trim()}\n\n---\nAmount: £${amount}\nDue: ${dueDate}\n\nPay here: ${paymentLink}`;
+    } else {
+      // Default message with payment info
+      msgBody = `Hi ${player.name}, your payment for ${teamRow.name} is due.\n\nAmount: £${amount}\nDue: ${dueDate}\n\nPay here: ${paymentLink}`;
+    }
 
     let sent = false;
     let channel = "none";
