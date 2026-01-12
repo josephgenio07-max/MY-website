@@ -1,179 +1,125 @@
 "use server";
 
+import { headers } from "next/headers";
 import { createSupabaseServerClient } from "@/lib/supabaseServer";
-import twilio from "twilio";
 
-function isUuidLike(v: unknown) {
-  return typeof v === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
+function assertUuid(id: string, label: string) {
+  const ok =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      (id ?? "").trim()
+    );
+  if (!ok) throw new Error(`${label} is not a valid UUID: "${id}"`);
 }
 
-async function sendWhatsApp(toE164: string, body: string) {
-  const sid = process.env.TWILIO_ACCOUNT_SID;
-  const token = process.env.TWILIO_AUTH_TOKEN;
-  const from = process.env.TWILIO_WHATSAPP_FROM;
+/**
+ * Base URL from headers (works on Vercel/proxies) fallback to env/local
+ */
+async function getBaseUrl() {
+  const h = await headers();
+  const host = h.get("x-forwarded-host") ?? h.get("host");
+  const proto = h.get("x-forwarded-proto") ?? "http";
 
-  if (!sid || !token || !from) {
-    throw new Error("Missing Twilio env vars (ACCOUNT_SID/AUTH_TOKEN/WHATSAPP_FROM).");
+  if (!host) {
+    return (
+      process.env.NEXT_PUBLIC_SITE_URL ??
+      process.env.NEXT_PUBLIC_BASE_URL ??
+      "http://localhost:3000"
+    );
   }
 
-  const client = twilio(sid, token);
-  const msg = await client.messages.create({
-    from,
-    to: `whatsapp:${toE164}`,
-    body,
-  });
-
-  return { providerId: msg.sid };
+  return `${proto}://${host}`;
 }
 
-async function sendSms(toE164: string, body: string) {
-  const sid = process.env.TWILIO_ACCOUNT_SID;
-  const token = process.env.TWILIO_AUTH_TOKEN;
-  const from = process.env.TWILIO_SMS_FROM;
+async function getAuthToken() {
+  const supabase = await createSupabaseServerClient();
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
 
-  if (!sid || !token || !from) {
-    throw new Error("Missing Twilio env vars (ACCOUNT_SID/AUTH_TOKEN/SMS_FROM).");
+  if (!token) {
+    throw new Error("Not logged in. Please refresh the page.");
   }
 
-  const client = twilio(sid, token);
-  const msg = await client.messages.create({
-    from,
-    to: toE164,
-    body,
+  return token;
+}
+
+async function callReminderApi(baseUrl: string, token: string, body: any) {
+  const res = await fetch(`${baseUrl}/api/send-reminder`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(body),
+    cache: "no-store",
   });
 
-  return { providerId: msg.sid };
+  const text = await res.text();
+  let json: any = {};
+  try {
+    json = JSON.parse(text);
+  } catch {}
+
+  if (!res.ok) {
+    throw new Error(json?.error || text || "Failed to send reminder.");
+  }
+
+  return json;
 }
 
-async function sendEmailStub(toEmail: string, body: string) {
-  return { providerId: `email_stub_${Date.now()}` };
-}
+// ============================================
+// SINGLE REMINDER
+// ============================================
 
-export async function sendReminder(args: {
+type SendReminderArgs = {
   teamId: string;
   membershipId: string;
   message?: string;
-}) {
-  if (!isUuidLike(args?.teamId)) throw new Error("Missing/invalid teamId.");
-  if (!isUuidLike(args?.membershipId)) throw new Error("Missing/invalid membershipId.");
+};
 
-  const supabase = await createSupabaseServerClient();
-  
-  const { data: { user }, error: authError } = await supabase.auth.getUser();
-  
-  if (authError) {
-    console.error("Auth error details:", authError);
-    throw new Error(`Auth failed: ${authError.message}`);
+export async function sendReminder(args: SendReminderArgs) {
+  assertUuid(args.teamId, "teamId");
+  assertUuid(args.membershipId, "membershipId");
+
+  const baseUrl = await getBaseUrl();
+  const token = await getAuthToken();
+
+  return await callReminderApi(baseUrl, token, {
+    teamId: args.teamId,
+    message: args.message?.trim() ?? "",
+    kind: "manual",
+    target: { mode: "single", membershipId: args.membershipId },
+  });
+}
+
+// ============================================
+// BULK REMINDERS
+// ============================================
+
+type BulkReminderTarget =
+  | { mode: "unpaid" }
+  | { mode: "due_soon"; days: number }
+  | { mode: "single"; membershipId: string };
+
+type SendBulkArgs = {
+  teamId: string;
+  message?: string;
+  kind?: "manual" | "auto";
+  target: BulkReminderTarget;
+};
+
+export async function sendBulkReminders(args: SendBulkArgs) {
+  assertUuid(args.teamId, "teamId");
+  if (args.target.mode === "single") {
+    assertUuid(args.target.membershipId, "membershipId");
   }
 
-  if (!user) {
-    console.error("No user found in session - cookies may not be present");
-    throw new Error("No user session found. Please log in.");
-  }
+  const baseUrl = await getBaseUrl();
+  const token = await getAuthToken();
 
-  console.log("Auth successful for user:", user.id);
-
-  const { data, error } = await supabase
-    .from("memberships")
-    .select(
-      `
-      id,
-      team_id,
-      player_id,
-      players (
-        id,
-        name,
-        email,
-        phone_e164,
-        reminder_consent
-      )
-    `
-    )
-    .eq("id", args.membershipId)
-    .eq("team_id", args.teamId)
-    .maybeSingle();
-
-  if (error) throw new Error(error.message);
-  if (!data) throw new Error("Membership not found.");
-
-  const membership = data;
-  const player = Array.isArray((membership as any).players)
-    ? (membership as any).players[0]
-    : (membership as any).players;
-
-  if (!player) throw new Error("Player not found.");
-
-  const { data: team, error: teamErr } = await supabase
-    .from("teams")
-    .select("name")
-    .eq("id", args.teamId)
-    .maybeSingle();
-
-  if (teamErr) throw new Error(teamErr.message);
-
-  const teamName = team?.name ?? "your team";
-  const body =
-    (args.message && args.message.trim()) ||
-    `Reminder from ${teamName}: your payment is due. Please pay using the team link.`;
-
-  if (!player.reminder_consent) {
-    throw new Error("No consent for reminders.");
-  }
-
-  async function attemptSend(channel: "whatsapp" | "sms" | "email") {
-    const { data: reminderId, error: createErr } = await supabase.rpc("create_manual_reminder", {
-      p_team_id: args.teamId,
-      p_player_id: membership.player_id,
-      p_channel: channel,
-      p_message: body,
-    });
-
-    if (createErr) throw new Error(createErr.message);
-    if (!reminderId) throw new Error("Failed to create reminder log.");
-
-    try {
-      let result: { providerId: string };
-
-      if (channel === "whatsapp") {
-        if (!player.phone_e164) throw new Error("No phone");
-        result = await sendWhatsApp(player.phone_e164, body);
-      } else if (channel === "sms") {
-        if (!player.phone_e164) throw new Error("No phone");
-        result = await sendSms(player.phone_e164, body);
-      } else {
-        if (!player.email) throw new Error("No email");
-        result = await sendEmailStub(player.email, body);
-      }
-
-      const { error: finishErr } = await supabase.rpc("finish_reminder", {
-        p_id: reminderId,
-        p_status: "sent",
-        p_provider_id: result.providerId,
-        p_error: null,
-      });
-
-      if (finishErr) throw new Error(finishErr.message);
-      return true;
-    } catch (e: any) {
-      await supabase.rpc("finish_reminder", {
-        p_id: reminderId,
-        p_status: "failed",
-        p_provider_id: null,
-        p_error: e?.message ?? "Send failed",
-      });
-      return false;
-    }
-  }
-
-  if (player.phone_e164) {
-    if (await attemptSend("whatsapp")) return;
-    if (await attemptSend("sms")) return;
-  }
-
-  if (player.email) {
-    await attemptSend("email");
-    return;
-  }
-
-  throw new Error("No valid delivery method (missing phone/email).");
+  return await callReminderApi(baseUrl, token, {
+    teamId: args.teamId,
+    message: args.message?.trim() ?? "",
+    kind: args.kind ?? "manual",
+    target: args.target,
+  });
 }

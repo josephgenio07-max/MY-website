@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import supabase from "@/lib/supabase";
+import { sendBulkReminders } from "./actions";
 
 export default function SendBulkReminderButton({
   teamId,
@@ -42,37 +42,24 @@ export default function SendBulkReminderButton({
     setResult(null);
 
     try {
-      const { data } = await supabase.auth.getSession();
-      const token = data.session?.access_token;
-      
-      if (!token) throw new Error("Not logged in. Please refresh the page.");
-
       const target =
         mode === "unpaid"
-          ? ({ mode: "unpaid", teamId } as const)
-          : ({ mode: "due_soon", teamId, days } as const);
+          ? ({ mode: "unpaid" } as const)
+          : ({ mode: "due_soon", days } as const);
 
-      const res = await fetch("/api/reminders/send", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          teamId,
-          // Send the custom message - API will add payment link below it
-          message: msg.trim(),
-          kind: "manual",
-          target,
-        }),
+      const json = await sendBulkReminders({
+        teamId,
+        message: msg.trim(),
+        kind: "manual",
+        target,
       });
 
-      const json = await res.json();
-      if (!res.ok) throw new Error(json?.error || "Failed to send.");
-
-      setResult(`Sent: ${json.count} • Skipped (cooldown): ${json.skipped}`);
+      const sent = Number(json?.sent ?? 0);
+      const skipped = Number(json?.skipped ?? 0);
+      setResult(`Sent: ${sent} • Skipped: ${skipped}`);
+      setOpen(false);
     } catch (e: any) {
-      setResult(e?.message ?? "Failed");
+      setResult((e?.message ?? "Failed").toString());
     } finally {
       setBusy(false);
     }
@@ -123,22 +110,21 @@ export default function SendBulkReminderButton({
                   min={1}
                   max={30}
                   value={days}
-                  onChange={(e) => setDays(Math.max(1, Math.min(30, Number(e.target.value) || 3)))}
+                  onChange={(e) =>
+                    setDays(Math.max(1, Math.min(30, Number(e.target.value) || 3)))
+                  }
                   className="w-24 rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-gray-900"
                 />
               </div>
             )}
 
             <div className="mt-4">
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Your message
-              </label>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Your message</label>
               <textarea
                 className="w-full rounded-lg border border-gray-300 p-3 text-sm outline-none focus:ring-2 focus:ring-gray-900"
                 rows={4}
                 value={msg}
                 onChange={(e) => setMsg(e.target.value)}
-                placeholder="Enter your custom message..."
               />
               <p className="mt-2 text-xs text-gray-500">
                 💡 Payment details and link will be automatically added below your message

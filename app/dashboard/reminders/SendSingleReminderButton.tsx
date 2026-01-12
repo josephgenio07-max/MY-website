@@ -3,12 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import supabase from "@/lib/supabase";
 
-export default function SendSingleReminderButton({
-  teamId,
-  membershipId,
-  playerName,
-  disabled,
-}: {
+export default function SendSingleReminderButton(props: {
   teamId: string;
   membershipId: string;
   playerName?: string | null;
@@ -20,69 +15,60 @@ export default function SendSingleReminderButton({
   const [msg, setMsg] = useState("");
 
   useEffect(() => {
-    // Default message - manager can customize this
-    // Payment link will be added automatically by the API
-    setMsg(`Hi${playerName ? ` ${playerName}` : ""}, quick reminder your payment is due. Thanks!`);
-  }, [playerName]);
+    setMsg(
+      `Hi${props.playerName ? ` ${props.playerName}` : ""}, quick reminder your payment is due. Thanks!`
+    );
+  }, [props.playerName]);
 
   const hardDisabled = useMemo(() => {
-    if (disabled) return true;
-    if (!teamId) return true;
-    if (!membershipId) return true;
+    if (props.disabled) return true;
+    if (!props.teamId) return true;
+    if (!props.membershipId) return true;
     return false;
-  }, [disabled, teamId, membershipId]);
+  }, [props.disabled, props.teamId, props.membershipId]);
 
   async function send() {
     setBusy(true);
     setResult(null);
 
     try {
-      if (!teamId || !membershipId) throw new Error("Missing team or membership id.");
-
       const { data } = await supabase.auth.getSession();
       const token = data.session?.access_token;
-      
       if (!token) throw new Error("Not logged in. Please refresh the page.");
 
-      const res = await fetch("/api/reminders/send-single", {
+      const res = await fetch("/api/send-reminder", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({
-          teamId,
-          membershipId,
-          // Send the custom message - API will add payment link below it
+          teamId: props.teamId,
           message: msg.trim(),
+          kind: "manual",
+          target: { mode: "single", membershipId: props.membershipId },
         }),
       });
 
-      const contentType = res.headers.get("content-type");
-      
-      if (!contentType || !contentType.includes("application/json")) {
-        const text = await res.text();
-        console.error("Non-JSON response:", text.substring(0, 200));
-        throw new Error("Server error. Check console for details.");
-      }
+      const text = await res.text();
+      let json: any = {};
+      try {
+        json = JSON.parse(text);
+      } catch {}
 
-      const json = await res.json();
-      
-      if (!res.ok) {
-        throw new Error(json?.error || "Failed to send.");
-      }
+      if (!res.ok) throw new Error(json?.error || text || "Failed to send reminder.");
 
-      setResult(`Sent via ${json.channel || "unknown"}`);
+      const r0 = Array.isArray(json?.results) ? json.results[0] : null;
+
+      if (r0?.sent === true) setResult("Reminder sent.");
+      else if (r0?.reason === "cooldown") setResult("Already reminded recently.");
+      else if (r0?.reason === "no_consent") setResult("No consent for reminders.");
+      else if (r0?.reason === "delivery_failed") setResult("Delivery failed (no working contact).");
+      else setResult("Reminder not sent.");
+
       setOpen(false);
     } catch (e: any) {
-      const message = (e?.message ?? "Failed").toString();
-      const m = message.toLowerCase();
-      
-      if (m.includes("cooldown")) setResult("Already reminded recently.");
-      else if (m.includes("no consent")) setResult("No consent for reminders.");
-      else if (m.includes("no phone")) setResult("No phone saved for this player.");
-      else if (m.includes("no contact")) setResult("No email or phone for this player.");
-      else setResult(message);
+      setResult((e?.message ?? "Failed").toString());
     } finally {
       setBusy(false);
     }
@@ -91,19 +77,17 @@ export default function SendSingleReminderButton({
   return (
     <>
       <button
-        disabled={hardDisabled}
+        className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 transition-colors disabled:opacity-50"
+        disabled={hardDisabled || busy}
         onClick={() => {
           setResult(null);
-          if (!teamId || !membershipId) {
-            setResult("Missing team/membership id.");
-            return;
-          }
           setOpen(true);
         }}
-        className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 transition-colors disabled:opacity-50"
       >
-        Remind
+        {busy ? "Sending…" : "Remind"}
       </button>
+
+      {result && <div className="text-[11px] text-red-600 mt-1">{result}</div>}
 
       {open && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
@@ -118,6 +102,7 @@ export default function SendSingleReminderButton({
 
               <button
                 onClick={() => setOpen(false)}
+                disabled={busy}
                 className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
               >
                 Close
@@ -133,28 +118,22 @@ export default function SendSingleReminderButton({
                 rows={4}
                 value={msg}
                 onChange={(e) => setMsg(e.target.value)}
-                placeholder="Enter your custom message..."
               />
-              <p className="mt-2 text-xs text-gray-500">
-                💡 Payment details and link will be automatically added below your message
-              </p>
             </div>
-
-            {result && <p className="mt-3 text-sm text-gray-700">{result}</p>}
 
             <div className="mt-5 flex justify-end gap-2">
               <button
                 onClick={() => setOpen(false)}
                 disabled={busy}
-                className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 transition-colors"
+                className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
               >
                 Cancel
               </button>
 
               <button
                 onClick={send}
-                disabled={busy || !msg.trim() || !teamId || !membershipId}
-                className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-800 disabled:opacity-50 transition-colors"
+                disabled={busy || !msg.trim()}
+                className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-800 disabled:opacity-50"
               >
                 {busy ? "Sending..." : "Send"}
               </button>

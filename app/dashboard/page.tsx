@@ -7,6 +7,7 @@ import supabase from "@/lib/supabase";
 import SendBulkReminderButton from "./reminders/SendBulkReminderButton";
 import SendSingleReminderButton from "./reminders/SendSingleReminderButton";
 import MarkPaidButton from "./MarkPaidButton";
+import SetCustomAmountButton from "./components/SetCustomAmountButton";
 
 type Team = {
   id: string;
@@ -30,21 +31,24 @@ type MembershipRow = {
   team_id: string;
   status: "pending" | "active" | "due" | "overdue" | "canceled";
   billing_type: "subscription" | "one_off" | "bank_transfer" | "manual";
-  plan_interval: string;
+  plan_interval: string | null;
   next_due_at: string | null;
   last_paid_at: string | null;
+  custom_amount_gbp: number | null; // ✅ NEW
   player: Player;
 };
 
 type Plan = {
-  amount: number;
+  amount: number; // cents
   currency: string;
   interval: string;
 };
 
 function formatDate(iso: string | null) {
   if (!iso) return "—";
-  return new Date(iso).toLocaleDateString("en-GB", {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleDateString("en-GB", {
     day: "numeric",
     month: "short",
     year: "numeric",
@@ -60,13 +64,15 @@ function StatusBadge({ status }: { status: MembershipRow["status"] }) {
     pending: "bg-gray-50 text-gray-600 border-gray-200",
   };
 
+  const label = status === "due" ? "due" : status;
+
   return (
     <span
-      className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-medium ${
+      className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-medium ${
         styles[status] ?? styles.pending
       }`}
     >
-      {status}
+      {label}
     </span>
   );
 }
@@ -78,7 +84,6 @@ export default function DashboardPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const [userId, setUserId] = useState<string | null>(null);
   const [teams, setTeams] = useState<Team[]>([]);
   const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
 
@@ -86,29 +91,31 @@ export default function DashboardPage() {
   const [memberships, setMemberships] = useState<MembershipRow[]>([]);
   const [plan, setPlan] = useState<Plan | null>(null);
   const [collectedThisMonthCents, setCollectedThisMonthCents] = useState<number>(0);
-  const [unreadCount, setUnreadCount] = useState(0);
+
+  const [unreadCount, setUnreadCount] = useState<number>(0);
 
   const selectedTeam = useMemo(
     () => teams.find((t) => t.id === selectedTeamId) ?? null,
     [teams, selectedTeamId]
   );
 
+  const hasTeamSelected = Boolean(selectedTeamId);
+
   const stats = useMemo(() => {
     const total = memberships.length;
     const expected = selectedTeam?.expected_players ?? null;
+
     const paid = memberships.filter((m) => m.status === "active").length;
     const due = memberships.filter((m) => m.status === "due").length;
     const overdue = memberships.filter((m) => m.status === "overdue").length;
     const unpaid = due + overdue;
+
     return { total, expected, paid, due, overdue, unpaid };
   }, [memberships, selectedTeam]);
 
-  const statColorClass: Record<"gray" | "emerald" | "rose" | "blue", string> = {
-    gray: "text-gray-600",
-    emerald: "text-emerald-600",
-    rose: "text-rose-600",
-    blue: "text-blue-600",
-  };
+  const collectedGBP = (collectedThisMonthCents / 100).toFixed(2);
+  const planAmountGBP = plan ? (plan.amount / 100).toFixed(2) : "—";
+  const teamDefaultGBP = plan ? plan.amount / 100 : 5;
 
   async function copyToClipboard(text: string) {
     try {
@@ -123,9 +130,16 @@ export default function DashboardPage() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
+      cache: "no-store",
     });
-    const json = await res.json();
-    if (!res.ok) throw new Error(json?.error || "API request failed");
+
+    const text = await res.text();
+    let json: any = {};
+    try {
+      json = JSON.parse(text);
+    } catch {}
+
+    if (!res.ok) throw new Error(json?.error || text || "API request failed");
     return json;
   }
 
@@ -151,6 +165,7 @@ export default function DashboardPage() {
     setPlan(null);
     setCollectedThisMonthCents(0);
 
+    // Join link
     try {
       const url = await getOrCreateJoinLink(teamId);
       setJoinLink(url);
@@ -158,6 +173,7 @@ export default function DashboardPage() {
       setError(e instanceof Error ? e.message : "Failed to load join link");
     }
 
+    // Plan
     const { data: planRow } = await supabase
       .from("team_plans")
       .select("amount, currency, interval")
@@ -169,11 +185,19 @@ export default function DashboardPage() {
 
     if (planRow) setPlan(planRow as Plan);
 
+    // Memberships
     const { data: memRows, error: memErr } = await supabase
       .from("memberships")
       .select(
         `
-        id, team_id, status, billing_type, plan_interval, next_due_at, last_paid_at,
+        id,
+        team_id,
+        status,
+        billing_type,
+        plan_interval,
+        next_due_at,
+        last_paid_at,
+        custom_amount_gbp,
         player:players!inner (id, name, email, phone)
       `
       )
@@ -187,6 +211,7 @@ export default function DashboardPage() {
 
     setMemberships((memRows ?? []) as unknown as MembershipRow[]);
 
+    // Collected this month
     const { data: payRows } = await supabase
       .from("payments")
       .select("amount")
@@ -230,6 +255,7 @@ export default function DashboardPage() {
     router.replace("/auth/login");
   }
 
+  // Init + teams
   useEffect(() => {
     let cancelled = false;
 
@@ -244,11 +270,11 @@ export default function DashboardPage() {
       }
       if (cancelled) return;
 
-      setUserId(data.user.id);
-
       const { data: teamRows, error: teamErr } = await supabase
         .from("teams")
-        .select("id, name, expected_players, stripe_account_id, stripe_charges_enabled, stripe_card_payments, archived_at")
+        .select(
+          "id, name, expected_players, stripe_account_id, stripe_charges_enabled, stripe_card_payments, archived_at"
+        )
         .eq("manager_id", data.user.id)
         .is("archived_at", null)
         .order("created_at", { ascending: false });
@@ -261,12 +287,7 @@ export default function DashboardPage() {
 
       const list = (teamRows ?? []) as Team[];
       setTeams(list);
-
-      if (list.length > 0) {
-        setSelectedTeamId(list[0]?.id ?? null);
-      } else {
-        setSelectedTeamId(null);
-      }
+      setSelectedTeamId(list[0]?.id ?? null);
 
       setLoading(false);
     }
@@ -277,49 +298,53 @@ export default function DashboardPage() {
     };
   }, [router]);
 
+  // Load team data when team changes
   useEffect(() => {
     if (!selectedTeamId) return;
     loadTeamData(selectedTeamId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedTeamId]);
-useEffect(() => {
-  async function loadUnreadCount() {
-    const { data } = await supabase.auth.getUser();
-    if (!data.user) return;
 
-    const { count } = await supabase
-      .from("notifications")
-      .select("*", { count: "exact", head: true })
-      .eq("manager_id", data.user.id)
-      .eq("is_read", false);
+  // Notifications badge polling
+  useEffect(() => {
+    let alive = true;
 
-    setUnreadCount(count || 0);
-  }
+    async function loadUnreadCount() {
+      const { data } = await supabase.auth.getUser();
+      if (!data.user || !alive) return;
 
-  loadUnreadCount();
-  
-  const interval = setInterval(loadUnreadCount, 30000);
-  return () => clearInterval(interval);
-}, []);
+      const { count } = await supabase
+        .from("notifications")
+        .select("*", { count: "exact", head: true })
+        .eq("manager_id", data.user.id)
+        .eq("is_read", false);
+
+      if (!alive) return;
+      setUnreadCount(count || 0);
+    }
+
+    loadUnreadCount();
+    const interval = setInterval(loadUnreadCount, 30000);
+
+    return () => {
+      alive = false;
+      clearInterval(interval);
+    };
+  }, []);
 
   if (loading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-gray-50">
         <div className="text-center">
-          <div className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-gray-900 border-r-transparent"></div>
+          <div className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-gray-900 border-r-transparent" />
           <p className="mt-3 text-sm text-gray-600">Loading dashboard...</p>
         </div>
       </div>
     );
   }
 
-  const collectedGBP = (collectedThisMonthCents / 100).toFixed(2);
-  const planAmountGBP = plan ? (plan.amount / 100).toFixed(2) : "—";
-
-  const hasTeamSelected = Boolean(selectedTeamId);
-
   return (
-    <main className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
+    <main className="min-h-screen bg-gray-50">
       <header className="sticky top-0 z-50 border-b border-gray-200 bg-white/80 backdrop-blur-sm">
         <div className="mx-auto max-w-7xl px-6 py-4">
           <div className="flex items-center justify-between">
@@ -328,10 +353,12 @@ useEffect(() => {
               <p className="text-sm text-gray-500">Manage your team payments</p>
             </div>
 
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2">
               <button
                 onClick={() => router.push("/notifications")}
                 className="relative rounded-lg p-2 text-gray-600 hover:bg-gray-100 hover:text-gray-900 transition-colors"
+                aria-label="Notifications"
+                title="Notifications"
               >
                 <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path
@@ -341,11 +368,12 @@ useEffect(() => {
                     d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"
                   />
                 </svg>
+
                 {unreadCount > 0 && (
-  <span className="absolute -top-1 -right-1 flex h-5 w-5 items-center justify-center rounded-full bg-red-500 text-[10px] font-bold text-white">
-    {unreadCount > 9 ? "9+" : unreadCount}
-  </span>
-)}
+                  <span className="absolute -top-1 -right-1 flex h-5 w-5 items-center justify-center rounded-full bg-red-500 text-[10px] font-bold text-white">
+                    {unreadCount > 9 ? "9+" : unreadCount}
+                  </span>
+                )}
               </button>
 
               <button
@@ -357,7 +385,7 @@ useEffect(() => {
 
               <button
                 onClick={handleLogout}
-                className="rounded-lg border-2 border-red-200 bg-red-50 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-100 transition-colors"
+                className="rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-100 transition-colors"
               >
                 Logout
               </button>
@@ -366,7 +394,7 @@ useEffect(() => {
         </div>
       </header>
 
-      <div className="mx-auto max-w-7xl px-6 py-8 space-y-8">
+      <div className="mx-auto max-w-7xl px-6 py-8 space-y-6">
         {error && (
           <div className="rounded-xl border border-red-200 bg-red-50 p-4">
             <div className="flex items-start gap-3">
@@ -386,30 +414,33 @@ useEffect(() => {
         )}
 
         {teams.length === 0 ? (
-          <div className="rounded-2xl bg-white p-16 text-center shadow-sm">
+          <div className="rounded-2xl bg-white p-14 text-center shadow-sm">
             <div className="mx-auto max-w-sm">
               <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-gray-100">
                 <svg className="h-8 w-8 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
                 </svg>
               </div>
+
               <h2 className="mt-6 text-xl font-semibold text-gray-900">No teams yet</h2>
-              <p className="mt-2 text-gray-600">Create your first team to start collecting payments</p>
+              <p className="mt-2 text-gray-600">Create your first team to start collecting payments.</p>
+
               <button
                 onClick={() => router.push("/team/setup")}
                 className="mt-8 rounded-lg bg-gray-900 px-6 py-3 text-sm font-medium text-white hover:bg-gray-800 transition-colors"
               >
-                Create Your First Team
+                Create your first team
               </button>
             </div>
           </div>
         ) : (
           <>
+            {/* Team selector + actions */}
             <div className="rounded-2xl bg-white p-6 shadow-sm">
-              <div className="flex items-start gap-6">
+              <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                 <div className="flex-1 space-y-4">
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">Active Team</label>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Active team</label>
                     <select
                       className="w-full rounded-lg border border-gray-300 px-4 py-2.5 text-base font-medium text-gray-900 focus:ring-2 focus:ring-gray-900 focus:border-transparent outline-none transition-all"
                       value={selectedTeamId ?? ""}
@@ -423,30 +454,32 @@ useEffect(() => {
                     </select>
                   </div>
 
-                  <div className="flex items-center gap-3">
+                  <div className="flex flex-wrap items-center gap-2">
                     <button
                       onClick={() => selectedTeamId && router.push(`/team/${selectedTeamId}/settings`)}
                       disabled={!selectedTeamId}
                       className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 transition-colors"
                     >
-                      Team Settings
+                      Team settings
                     </button>
+
                     <button
                       onClick={() => router.push("/dashboard/teams")}
                       className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
                     >
-                      Manage Teams
+                      Manage teams
                     </button>
+
                     <button
                       onClick={() => router.push("/team/setup")}
                       className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-800 transition-colors"
                     >
-                      Create New Team
+                      Create new team
                     </button>
                   </div>
 
                   {plan && (
-                    <div className="flex items-center gap-4 text-sm">
+                    <div className="flex flex-wrap items-center gap-2 text-sm">
                       <span className="inline-flex items-center gap-2 rounded-full bg-blue-50 px-3 py-1 text-blue-700 font-medium">
                         Plan: £{planAmountGBP}/{plan.interval}
                       </span>
@@ -457,10 +490,10 @@ useEffect(() => {
                   )}
                 </div>
 
-                <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 min-w-[200px]">
-                  <div className="flex items-center justify-between mb-3">
-                    <p className="text-sm font-medium text-gray-900">Stripe Status</p>
-                  </div>
+                {/* Stripe status card */}
+                <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 min-w-[220px]">
+                  <p className="text-sm font-medium text-gray-900 mb-3">Stripe status</p>
+
                   <div className="space-y-2 text-xs">
                     <div className="flex items-center justify-between">
                       <span className="text-gray-600">Charges</span>
@@ -470,15 +503,17 @@ useEffect(() => {
                         <span className="font-medium text-rose-600">Inactive</span>
                       )}
                     </div>
+
                     <div className="flex items-center justify-between">
-                      <span className="text-gray-600">Card Payments</span>
+                      <span className="text-gray-600">Card payments</span>
                       {selectedTeam?.stripe_card_payments === "active" ? (
                         <span className="font-medium text-emerald-600">Ready</span>
                       ) : (
-                        <span className="font-medium text-gray-500">Not Ready</span>
+                        <span className="font-medium text-gray-500">Not ready</span>
                       )}
                     </div>
                   </div>
+
                   <button
                     onClick={() => selectedTeamId && router.push(`/team/${selectedTeamId}/connect-stripe`)}
                     disabled={!selectedTeamId}
@@ -490,35 +525,52 @@ useEffect(() => {
               </div>
             </div>
 
+            {/* Stats */}
             <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
-              {[
-                { label: "Players", value: stats.total, color: "gray" as const },
-                { label: "Expected", value: stats.expected ?? "—", color: "gray" as const },
-                { label: "Paid", value: stats.paid, color: "emerald" as const },
-                { label: "Due/Overdue", value: stats.unpaid, color: "rose" as const },
-                { label: "Collected", value: `£${collectedGBP}`, color: "blue" as const },
-              ].map((stat, i) => (
-                <div key={i} className="rounded-xl bg-white p-6 shadow-sm hover:shadow-md transition-shadow">
-                  <p className="text-sm font-medium text-gray-600">{stat.label}</p>
-                  <p className={`mt-2 text-3xl font-bold ${statColorClass[stat.color]}`}>{stat.value}</p>
-                </div>
-              ))}
+              <div className="rounded-xl bg-white p-5 shadow-sm">
+                <p className="text-sm font-medium text-gray-600">Players</p>
+                <p className="mt-2 text-3xl font-bold text-gray-900">{stats.total}</p>
+              </div>
+
+              <div className="rounded-xl bg-white p-5 shadow-sm">
+                <p className="text-sm font-medium text-gray-600">Expected</p>
+                <p className="mt-2 text-3xl font-bold text-gray-900">{stats.expected ?? "—"}</p>
+              </div>
+
+              <div className="rounded-xl bg-white p-5 shadow-sm">
+                <p className="text-sm font-medium text-gray-600">Paid</p>
+                <p className="mt-2 text-3xl font-bold text-emerald-600">{stats.paid}</p>
+              </div>
+
+              <div className="rounded-xl bg-white p-5 shadow-sm">
+                <p className="text-sm font-medium text-gray-600">Due/overdue</p>
+                <p className="mt-2 text-3xl font-bold text-rose-600">{stats.unpaid}</p>
+              </div>
+
+              <div className="rounded-xl bg-white p-5 shadow-sm">
+                <p className="text-sm font-medium text-gray-600">Collected</p>
+                <p className="mt-2 text-3xl font-bold text-blue-600">£{collectedGBP}</p>
+              </div>
             </div>
 
+            {/* Join link */}
             <div className="rounded-2xl bg-white p-6 shadow-sm">
-              <h3 className="text-lg font-semibold text-gray-900 mb-4">Payment Link</h3>
+              <h3 className="text-lg font-semibold text-gray-900 mb-4">Join link</h3>
+
               {joinLink ? (
                 <div className="space-y-3">
                   <div className="flex items-center gap-2 rounded-lg bg-gray-50 border border-gray-200 p-3">
                     <code className="flex-1 text-sm text-gray-700 break-all">{joinLink}</code>
                   </div>
+
                   <div className="flex flex-wrap gap-2">
                     <button
                       onClick={() => copyToClipboard(joinLink)}
                       className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-800 transition-colors"
                     >
-                      Copy Link
+                      Copy link
                     </button>
+
                     <a
                       href={joinLink}
                       target="_blank"
@@ -527,12 +579,13 @@ useEffect(() => {
                     >
                       Preview
                     </a>
+
                     <button
                       onClick={rotateJoinLink}
                       disabled={busy}
                       className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 transition-colors"
                     >
-                      Rotate
+                      {busy ? "Working..." : "Rotate"}
                     </button>
                   </div>
                 </div>
@@ -541,11 +594,17 @@ useEffect(() => {
               )}
             </div>
 
+            {/* Players table */}
             <div className="rounded-2xl bg-white shadow-sm overflow-hidden">
-              <div className="flex items-center justify-between p-6 border-b border-gray-100">
-                <h3 className="text-lg font-semibold text-gray-900">Players</h3>
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between p-6 border-b border-gray-100">
+                <div>
+                  <h3 className="text-lg font-semibold text-gray-900">Players</h3>
+                  <p className="text-sm text-gray-500">
+                    Send reminders, mark payments, or set custom amounts per player.
+                  </p>
+                </div>
 
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   {hasTeamSelected && (
                     <>
                       <SendBulkReminderButton teamId={selectedTeamId!} mode="unpaid" label="Remind unpaid" />
@@ -565,7 +624,10 @@ useEffect(() => {
 
               {memberships.length === 0 ? (
                 <div className="p-12 text-center">
-                  <p className="text-gray-500">No players yet. They'll appear after first payment.</p>
+                  <p className="text-gray-600 font-medium">No players yet</p>
+                  <p className="mt-1 text-sm text-gray-500">
+                    Players appear after they join and make their first payment.
+                  </p>
                 </div>
               ) : (
                 <div className="overflow-x-auto">
@@ -575,8 +637,8 @@ useEffect(() => {
                         <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Player</th>
                         <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
                         <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Billing</th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Last Paid</th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Next Due</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Last paid</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Next due</th>
                         <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Actions</th>
                       </tr>
                     </thead>
@@ -589,7 +651,16 @@ useEffect(() => {
                         return (
                           <tr key={m.id} className="hover:bg-gray-50 transition-colors">
                             <td className="px-6 py-4">
-                              <div className="font-medium text-gray-900">{p?.name ?? "—"}</div>
+                              <div className="flex items-center gap-2">
+                                <div className="font-medium text-gray-900">{p?.name ?? "—"}</div>
+
+                                {m.custom_amount_gbp !== null && (
+                                  <span className="inline-flex items-center rounded-full border border-gray-200 bg-white px-2 py-0.5 text-[11px] font-medium text-gray-700">
+                                    £{Number(m.custom_amount_gbp).toFixed(2)}
+                                  </span>
+                                )}
+                              </div>
+
                               <div className="text-sm text-gray-500">{p?.email ?? "—"}</div>
                             </td>
 
@@ -619,6 +690,12 @@ useEffect(() => {
                                       playerId={p.id}
                                       defaultAmountCents={plan?.amount ?? 0}
                                       currency={(plan?.currency ?? "gbp") as string}
+                                    />
+
+                                    <SetCustomAmountButton
+                                      membershipId={m.id}
+                                      currentAmount={m.custom_amount_gbp}
+                                      teamDefaultAmount={teamDefaultGBP}
                                     />
                                   </>
                                 ) : (
