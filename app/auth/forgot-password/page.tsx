@@ -4,8 +4,13 @@ import { useState } from "react";
 import supabase from "@/lib/supabase";
 import Link from "next/link";
 
+const inputCls =
+  "mt-1 block w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-gray-900 placeholder:text-gray-400 shadow-sm " +
+  "focus:ring-2 focus:ring-gray-900 focus:border-transparent outline-none";
+
 export default function ForgotPasswordPage() {
   const [email, setEmail] = useState("");
+  const [submittedEmail, setSubmittedEmail] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
@@ -16,7 +21,9 @@ export default function ForgotPasswordPage() {
     setError(null);
     setSuccess(false);
 
-    if (!email.trim()) {
+    const trimmedEmail = email.trim().toLowerCase();
+
+    if (!trimmedEmail) {
       setError("Please enter your email address");
       setLoading(false);
       return;
@@ -24,7 +31,7 @@ export default function ForgotPasswordPage() {
 
     try {
       const { error: resetError } = await supabase.auth.resetPasswordForEmail(
-        email.trim(),
+        trimmedEmail,
         {
           redirectTo: `${window.location.origin}/auth/reset-password`,
         }
@@ -32,9 +39,10 @@ export default function ForgotPasswordPage() {
 
       if (resetError) throw resetError;
 
+      setSubmittedEmail(trimmedEmail);
       setSuccess(true);
     } catch (err: any) {
-      setError(err.message || "Failed to send reset email");
+      setError(err?.message || "Failed to send reset email");
     } finally {
       setLoading(false);
     }
@@ -58,29 +66,18 @@ export default function ForgotPasswordPage() {
         <div className="bg-white py-8 px-4 shadow-sm border border-gray-100 rounded-2xl sm:px-10">
           {success ? (
             <div className="rounded-lg bg-green-50 border border-green-200 p-4">
-              <div className="flex">
-                <div className="flex-shrink-0">
-                  <svg className="h-5 w-5 text-green-400" viewBox="0 0 20 20" fill="currentColor">
-                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-                  </svg>
-                </div>
-                <div className="ml-3">
-                  <h3 className="text-sm font-medium text-green-800">Check your email</h3>
-                  <div className="mt-2 text-sm text-green-700">
-                    <p>
-                      We've sent a password reset link to <strong>{email}</strong>.
-                      Click the link in the email to reset your password.
-                    </p>
-                  </div>
-                  <div className="mt-4">
-                    <Link
-                      href="/auth/login"
-                      className="text-sm font-medium text-green-800 hover:text-green-900"
-                    >
-                      Back to sign in →
-                    </Link>
-                  </div>
-                </div>
+              <h3 className="text-sm font-medium text-green-800">Check your email</h3>
+              <p className="mt-2 text-sm text-green-700">
+                We&apos;ve sent a password reset link to{" "}
+                <strong>{submittedEmail}</strong>.
+              </p>
+              <div className="mt-4">
+                <Link
+                  href="/auth/login"
+                  className="text-sm font-medium text-green-800 hover:text-green-900"
+                >
+                  Back to sign in →
+                </Link>
               </div>
             </div>
           ) : (
@@ -91,11 +88,9 @@ export default function ForgotPasswordPage() {
                 </div>
               )}
 
-              <div className="mb-6">
-                <p className="text-sm text-gray-600">
-                  Enter your email address and we'll send you a link to reset your password.
-                </p>
-              </div>
+              <p className="mb-6 text-sm text-gray-600">
+                Enter your email address and we&apos;ll send you a link to reset your password.
+              </p>
 
               <form onSubmit={handleResetPassword} className="space-y-6">
                 <div>
@@ -108,7 +103,7 @@ export default function ForgotPasswordPage() {
                     type="email"
                     autoComplete="email"
                     required
-                    className="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 shadow-sm focus:ring-2 focus:ring-gray-900 focus:border-transparent outline-none"
+                    className={inputCls}
                     placeholder="you@example.com"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
@@ -118,7 +113,7 @@ export default function ForgotPasswordPage() {
                 <button
                   type="submit"
                   disabled={loading}
-                  className="w-full flex justify-center py-2.5 px-4 border border-transparent rounded-lg shadow-sm text-sm font-medium text-white bg-gray-900 hover:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-900 disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="w-full flex justify-center py-2.5 px-4 rounded-lg text-sm font-medium text-white bg-gray-900 hover:bg-gray-800 disabled:opacity-50"
                 >
                   {loading ? "Sending..." : "Send reset link"}
                 </button>

@@ -5,9 +5,13 @@ import { useRouter } from "next/navigation";
 import supabase from "@/lib/supabase";
 import Link from "next/link";
 
+const inputCls =
+  "mt-1 block w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-gray-900 placeholder:text-gray-400 shadow-sm " +
+  "focus:ring-2 focus:ring-gray-900 focus:border-transparent outline-none";
+
 export default function LoginPage() {
   const router = useRouter();
-  
+
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -18,7 +22,9 @@ export default function LoginPage() {
     setLoading(true);
     setError(null);
 
-    if (!email.trim() || !password) {
+    const trimmedEmail = email.trim().toLowerCase();
+
+    if (!trimmedEmail || !password) {
       setError("Please enter your email and password");
       setLoading(false);
       return;
@@ -26,8 +32,8 @@ export default function LoginPage() {
 
     try {
       const { data, error: signInError } = await supabase.auth.signInWithPassword({
-        email: email.trim(),
-        password: password,
+        email: trimmedEmail,
+        password,
       });
 
       if (signInError) throw signInError;
@@ -36,7 +42,8 @@ export default function LoginPage() {
         router.push("/dashboard");
       }
     } catch (err: any) {
-      setError(err.message || "Failed to sign in");
+      setError(err?.message || "Failed to sign in");
+    } finally {
       setLoading(false);
     }
   }
@@ -44,9 +51,7 @@ export default function LoginPage() {
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col justify-center py-12 sm:px-6 lg:px-8">
       <div className="sm:mx-auto sm:w-full sm:max-w-md">
-        <h2 className="text-center text-3xl font-bold text-gray-900">
-          Sign in to your account
-        </h2>
+        <h2 className="text-center text-3xl font-bold text-gray-900">Sign in to your account</h2>
         <p className="mt-2 text-center text-sm text-gray-600">
           Or{" "}
           <Link href="/auth/signup" className="font-medium text-gray-900 hover:text-gray-700">
@@ -74,7 +79,7 @@ export default function LoginPage() {
                 type="email"
                 autoComplete="email"
                 required
-                className="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 shadow-sm focus:ring-2 focus:ring-gray-900 focus:border-transparent outline-none"
+                className={inputCls}
                 placeholder="you@example.com"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
@@ -91,7 +96,7 @@ export default function LoginPage() {
                 type="password"
                 autoComplete="current-password"
                 required
-                className="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 shadow-sm focus:ring-2 focus:ring-gray-900 focus:border-transparent outline-none"
+                className={inputCls}
                 placeholder="Enter your password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
@@ -111,10 +116,7 @@ export default function LoginPage() {
                 </label>
               </div>
 
-              <Link
-                href="/auth/forgot-password"
-                className="text-sm font-medium text-gray-900 hover:text-gray-700"
-              >
+              <Link href="/auth/forgot-password" className="text-sm font-medium text-gray-900 hover:text-gray-700">
                 Forgot password?
               </Link>
             </div>

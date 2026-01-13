@@ -5,9 +5,13 @@ import { useRouter } from "next/navigation";
 import supabase from "@/lib/supabase";
 import Link from "next/link";
 
+const inputCls =
+  "mt-1 block w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-gray-900 placeholder:text-gray-400 shadow-sm " +
+  "focus:ring-2 focus:ring-gray-900 focus:border-transparent outline-none";
+
 export default function SignUpPage() {
   const router = useRouter();
-  
+
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -20,7 +24,10 @@ export default function SignUpPage() {
     setLoading(true);
     setError(null);
 
-    if (!email.trim() || !password || !confirmPassword) {
+    const trimmedEmail = email.trim().toLowerCase();
+    const trimmedName = name.trim();
+
+    if (!trimmedEmail || !password || !confirmPassword) {
       setError("Please fill in all fields");
       setLoading(false);
       return;
@@ -40,27 +47,34 @@ export default function SignUpPage() {
 
     try {
       const { data, error: signUpError } = await supabase.auth.signUp({
-        email: email.trim(),
-        password: password,
+        email: trimmedEmail,
+        password,
         options: {
+          // ✅ CRITICAL: ensures the email verification link lands on a REAL route in your app
+          emailRedirectTo: `${window.location.origin}/auth/callback`,
           data: {
-            display_name: name.trim() || null,
+            display_name: trimmedName || null,
           },
         },
       });
 
       if (signUpError) throw signUpError;
 
+      // If confirmation is ON, user must verify.
+      // If confirmation is OFF, you can send them straight into the app.
       if (data.user) {
-        // Check if email confirmation is required
-        if (data.user.confirmed_at) {
-        router.push("/team/setup");
+        if ((data.user as any).confirmed_at) {
+          router.push("/team/setup");
         } else {
           router.push("/auth/verify-email");
         }
+      } else {
+        // Rare case: no user returned
+        router.push("/auth/verify-email");
       }
     } catch (err: any) {
-      setError(err.message || "Failed to create account");
+      setError(err?.message || "Failed to create account");
+    } finally {
       setLoading(false);
     }
   }
@@ -68,9 +82,7 @@ export default function SignUpPage() {
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col justify-center py-12 sm:px-6 lg:px-8">
       <div className="sm:mx-auto sm:w-full sm:max-w-md">
-        <h2 className="text-center text-3xl font-bold text-gray-900">
-          Create your account
-        </h2>
+        <h2 className="text-center text-3xl font-bold text-gray-900">Create your account</h2>
         <p className="mt-2 text-center text-sm text-gray-600">
           Already have an account?{" "}
           <Link href="/auth/login" className="font-medium text-gray-900 hover:text-gray-700">
@@ -97,7 +109,7 @@ export default function SignUpPage() {
                 name="name"
                 type="text"
                 autoComplete="name"
-                className="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 shadow-sm focus:ring-2 focus:ring-gray-900 focus:border-transparent outline-none"
+                className={inputCls}
                 placeholder="John Smith"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
@@ -114,7 +126,7 @@ export default function SignUpPage() {
                 type="email"
                 autoComplete="email"
                 required
-                className="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 shadow-sm focus:ring-2 focus:ring-gray-900 focus:border-transparent outline-none"
+                className={inputCls}
                 placeholder="you@example.com"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
@@ -131,7 +143,7 @@ export default function SignUpPage() {
                 type="password"
                 autoComplete="new-password"
                 required
-                className="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 shadow-sm focus:ring-2 focus:ring-gray-900 focus:border-transparent outline-none"
+                className={inputCls}
                 placeholder="At least 6 characters"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
@@ -149,7 +161,7 @@ export default function SignUpPage() {
                 type="password"
                 autoComplete="new-password"
                 required
-                className="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 shadow-sm focus:ring-2 focus:ring-gray-900 focus:border-transparent outline-none"
+                className={inputCls}
                 placeholder="Re-enter password"
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}

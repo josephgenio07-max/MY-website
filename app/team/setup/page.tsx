@@ -1,17 +1,25 @@
-'use client';
+"use client";
 
-import { useEffect, useMemo, useState } from 'react';
-import { useRouter } from 'next/navigation';
-import supabase from '@/lib/supabase';
+import React, { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
+import supabase from "@/lib/supabase";
 
 function makeToken(length = 40) {
-  const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-  let out = '';
+  const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+  let out = "";
   for (let i = 0; i < length; i++) out += chars[Math.floor(Math.random() * chars.length)];
   return out;
 }
 
-type Interval = 'week' | 'month' | 'quarter';
+type Interval = "week" | "month" | "quarter";
+
+const inputCls =
+  "mt-1 w-full rounded-xl border border-gray-300 bg-white px-3 py-2 text-gray-900 placeholder:text-gray-400 " +
+  "focus:outline-none focus:ring-2 focus:ring-gray-900/10 focus:border-gray-400";
+
+const selectCls =
+  "mt-1 w-full rounded-xl border border-gray-300 bg-white px-3 py-2 text-gray-900 " +
+  "focus:outline-none focus:ring-2 focus:ring-gray-900/10 focus:border-gray-400";
 
 export default function SetupPage() {
   const router = useRouter();
@@ -23,11 +31,11 @@ export default function SetupPage() {
   const [teamId, setTeamId] = useState<string | null>(null);
   const [joinLink, setJoinLink] = useState<string | null>(null);
 
-  const [teamName, setTeamName] = useState('');
+  const [teamName, setTeamName] = useState("");
   const [expectedPlayers, setExpectedPlayers] = useState(26);
 
   const [amount, setAmount] = useState(20);
-  const [interval, setInterval] = useState<Interval>('month');
+  const [interval, setInterval] = useState<Interval>("month");
 
   const [dueWeekday, setDueWeekday] = useState(1);
   const [dueDayOfMonth, setDueDayOfMonth] = useState(1);
@@ -38,14 +46,14 @@ export default function SetupPage() {
   const [enableBank, setEnableBank] = useState(false);
 
   const [bankInstructions, setBankInstructions] = useState(
-    'Account name:\nSort code:\nAccount number:\nReference (players must use):'
+    "Account name:\nSort code:\nAccount number:\nReference (players must use):"
   );
 
   const methodsEnabled = useMemo(() => {
     const m: string[] = [];
-    if (enableCard) m.push('stripe_one_time');
-    if (enableRecurring) m.push('stripe_recurring');
-    if (enableBank) m.push('bank_transfer');
+    if (enableCard) m.push("stripe_one_time");
+    if (enableRecurring) m.push("stripe_recurring");
+    if (enableBank) m.push("bank_transfer");
     return m;
   }, [enableCard, enableRecurring, enableBank]);
 
@@ -53,7 +61,7 @@ export default function SetupPage() {
     const checkUser = async () => {
       const { data } = await supabase.auth.getUser();
       if (!data.user) {
-        router.replace('/auth/login');
+        router.replace("/auth/login");
         return;
       }
       setLoading(false);
@@ -62,13 +70,13 @@ export default function SetupPage() {
   }, [router]);
 
   function validateDueSettings() {
-    if (interval === 'week') {
-      if (![0, 1, 2, 3, 4, 5, 6].includes(dueWeekday)) return 'Pick a valid due weekday.';
+    if (interval === "week") {
+      if (![0, 1, 2, 3, 4, 5, 6].includes(dueWeekday)) return "Pick a valid due weekday.";
     } else {
-      if (dueDayOfMonth < 1 || dueDayOfMonth > 31) return 'Due day of month must be 1 to 31.';
+      if (dueDayOfMonth < 1 || dueDayOfMonth > 31) return "Due day of month must be 1 to 31.";
     }
-    if (interval === 'quarter') {
-      if (![1, 2, 3].includes(dueMonthInQuarter)) return 'Quarter month must be 1, 2, or 3.';
+    if (interval === "quarter") {
+      if (![1, 2, 3].includes(dueMonthInQuarter)) return "Quarter month must be 1, 2, or 3.";
     }
     return null;
   }
@@ -81,17 +89,17 @@ export default function SetupPage() {
 
     const { data } = await supabase.auth.getUser();
     if (!data.user) {
-      router.replace('/auth/login');
+      router.replace("/auth/login");
       return;
     }
 
     const name = teamName.trim();
-    if (!name) return setError('Team name is required.');
-    if (expectedPlayers < 1) return setError('Expected players must be at least 1.');
-    if (amount < 1) return setError('Amount must be at least 1.');
-    if (methodsEnabled.length === 0) return setError('Enable at least one payment method.');
+    if (!name) return setError("Team name is required.");
+    if (expectedPlayers < 1) return setError("Expected players must be at least 1.");
+    if (amount < 1) return setError("Amount must be at least 1.");
+    if (methodsEnabled.length === 0) return setError("Enable at least one payment method.");
     if (enableBank && bankInstructions.trim().length < 10) {
-      return setError('Please provide proper bank transfer instructions.');
+      return setError("Please provide proper bank transfer instructions.");
     }
 
     const dueErr = validateDueSettings();
@@ -100,15 +108,21 @@ export default function SetupPage() {
     setSaving(true);
 
     try {
+      // ✅ IMPORTANT: force Stripe fields to NULL on new teams
+      // This prevents “it reuses my old Stripe account” if anything weird is happening.
       const { data: team, error: teamError } = await supabase
-        .from('teams')
+        .from("teams")
         .insert({
           name,
           manager_id: data.user.id,
           expected_players: expectedPlayers,
-          due_weekday: interval === 'week' ? dueWeekday : null,
-          due_day_of_month: interval !== 'week' ? dueDayOfMonth : null,
-          due_month_in_quarter: interval === 'quarter' ? dueMonthInQuarter : null,
+          due_weekday: interval === "week" ? dueWeekday : null,
+          due_day_of_month: interval !== "week" ? dueDayOfMonth : null,
+          due_month_in_quarter: interval === "quarter" ? dueMonthInQuarter : null,
+
+          stripe_account_id: null,
+          stripe_charges_enabled: null,
+          stripe_card_payments: null,
         })
         .select()
         .single();
@@ -117,10 +131,10 @@ export default function SetupPage() {
 
       setTeamId(team.id);
 
-      const { error: planError } = await supabase.from('team_plans').insert({
+      const { error: planError } = await supabase.from("team_plans").insert({
         team_id: team.id,
         amount: Math.round(amount * 100),
-        currency: 'gbp',
+        currency: "gbp",
         interval,
         methods_enabled: methodsEnabled,
         bank_instructions: enableBank ? bankInstructions.trim() : null,
@@ -130,7 +144,7 @@ export default function SetupPage() {
       if (planError) throw planError;
 
       const token = makeToken();
-      const { error: linkError } = await supabase.from('join_links').insert({
+      const { error: linkError } = await supabase.from("join_links").insert({
         team_id: team.id,
         token,
         active: true,
@@ -140,7 +154,7 @@ export default function SetupPage() {
 
       setJoinLink(`${window.location.origin}/join/${token}`);
     } catch (err: any) {
-      setError(err?.message || 'Failed to create team.');
+      setError(err?.message || "Failed to create team.");
     } finally {
       setSaving(false);
     }
@@ -161,7 +175,7 @@ export default function SetupPage() {
             <div>
               <label className="block text-sm font-medium text-gray-700">Team name</label>
               <input
-                className="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2"
+                className={inputCls}
                 value={teamName}
                 onChange={(e) => setTeamName(e.target.value)}
                 placeholder="e.g. Sunday Lions FC"
@@ -173,7 +187,7 @@ export default function SetupPage() {
               <input
                 type="number"
                 min={1}
-                className="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2"
+                className={inputCls}
                 value={expectedPlayers}
                 onChange={(e) => setExpectedPlayers(Number(e.target.value))}
               />
@@ -186,7 +200,7 @@ export default function SetupPage() {
               <input
                 type="number"
                 min={1}
-                className="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2"
+                className={inputCls}
                 value={amount}
                 onChange={(e) => setAmount(Number(e.target.value))}
               />
@@ -194,11 +208,7 @@ export default function SetupPage() {
 
             <div>
               <label className="block text-sm font-medium text-gray-700">Frequency</label>
-              <select
-                className="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2"
-                value={interval}
-                onChange={(e) => setInterval(e.target.value as Interval)}
-              >
+              <select className={selectCls} value={interval} onChange={(e) => setInterval(e.target.value as Interval)}>
                 <option value="week">Weekly</option>
                 <option value="month">Monthly</option>
                 <option value="quarter">Quarterly</option>
@@ -208,19 +218,13 @@ export default function SetupPage() {
 
           <div className="rounded-2xl border border-gray-200 p-5">
             <p className="text-sm font-medium text-gray-900">Due schedule</p>
-            <p className="mt-1 text-xs text-gray-600">
-              Set when payments are due to prevent drift from late payments.
-            </p>
+            <p className="mt-1 text-xs text-gray-600">Set when payments are due to prevent drift from late payments.</p>
 
             <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
-              {interval === 'week' && (
+              {interval === "week" && (
                 <div>
                   <label className="block text-sm font-medium text-gray-700">Due weekday</label>
-                  <select
-                    className="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2"
-                    value={dueWeekday}
-                    onChange={(e) => setDueWeekday(Number(e.target.value))}
-                  >
+                  <select className={selectCls} value={dueWeekday} onChange={(e) => setDueWeekday(Number(e.target.value))}>
                     <option value={1}>Monday</option>
                     <option value={2}>Tuesday</option>
                     <option value={3}>Wednesday</option>
@@ -232,14 +236,14 @@ export default function SetupPage() {
                 </div>
               )}
 
-              {interval !== 'week' && (
+              {interval !== "week" && (
                 <div>
                   <label className="block text-sm font-medium text-gray-700">Due day of month</label>
                   <input
                     type="number"
                     min={1}
                     max={31}
-                    className="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2"
+                    className={inputCls}
                     value={dueDayOfMonth}
                     onChange={(e) => setDueDayOfMonth(Number(e.target.value))}
                   />
@@ -247,11 +251,11 @@ export default function SetupPage() {
                 </div>
               )}
 
-              {interval === 'quarter' && (
+              {interval === "quarter" && (
                 <div>
                   <label className="block text-sm font-medium text-gray-700">Month in quarter</label>
                   <select
-                    className="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2"
+                    className={selectCls}
                     value={dueMonthInQuarter}
                     onChange={(e) => setDueMonthInQuarter(Number(e.target.value) as 1 | 2 | 3)}
                   >
@@ -268,24 +272,24 @@ export default function SetupPage() {
             <p className="text-sm font-medium text-gray-900">Payment methods</p>
 
             <div className="mt-3 space-y-2">
-              <label className="flex items-center gap-2 text-sm">
+              <label className="flex items-center gap-2 text-sm text-gray-800">
                 <input type="checkbox" checked={enableCard} onChange={(e) => setEnableCard(e.target.checked)} />
                 Card (one-off)
               </label>
 
-              <label className="flex items-center gap-2 text-sm">
+              <label className="flex items-center gap-2 text-sm text-gray-800">
                 <input type="checkbox" checked={enableRecurring} onChange={(e) => setEnableRecurring(e.target.checked)} />
                 Card (subscription)
               </label>
 
-              <label className="flex items-center gap-2 text-sm">
+              <label className="flex items-center gap-2 text-sm text-gray-800">
                 <input type="checkbox" checked={enableBank} onChange={(e) => setEnableBank(e.target.checked)} />
                 Bank transfer
               </label>
 
               {enableBank && (
                 <textarea
-                  className="mt-2 w-full rounded-xl border border-gray-300 px-3 py-2"
+                  className={`${inputCls} mt-2`}
                   rows={5}
                   value={bankInstructions}
                   onChange={(e) => setBankInstructions(e.target.value)}
@@ -295,16 +299,14 @@ export default function SetupPage() {
           </div>
 
           {error && (
-            <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-              {error}
-            </div>
+            <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>
           )}
 
           <button
             disabled={saving}
             className="w-full rounded-xl bg-gray-900 py-2.5 font-medium text-white disabled:opacity-60"
           >
-            {saving ? 'Creating…' : 'Create team & payment link'}
+            {saving ? "Creating…" : "Create team & payment link"}
           </button>
         </form>
 
@@ -330,7 +332,7 @@ export default function SetupPage() {
               </button>
 
               <button
-                onClick={() => router.push('/dashboard')}
+                onClick={() => router.push("/dashboard")}
                 className="rounded-lg border border-green-300 bg-white px-3 py-2 text-sm text-green-900"
               >
                 Go to dashboard

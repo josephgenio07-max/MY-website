@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import supabase from "@/lib/supabase";
 
 import SendBulkReminderButton from "./reminders/SendBulkReminderButton";
@@ -34,7 +34,7 @@ type MembershipRow = {
   plan_interval: string | null;
   next_due_at: string | null;
   last_paid_at: string | null;
-  custom_amount_gbp: number | null; // ✅ NEW
+  custom_amount_gbp: number | null;
   player: Player;
 };
 
@@ -79,6 +79,7 @@ function StatusBadge({ status }: { status: MembershipRow["status"] }) {
 
 export default function DashboardPage() {
   const router = useRouter();
+  const sp = useSearchParams();
 
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -255,6 +256,32 @@ export default function DashboardPage() {
     router.replace("/auth/login");
   }
 
+  // ✅ NEW: refresh Stripe flags on return/refresh from onboarding
+  async function refreshStripeStatus(teamId: string) {
+    const res = await fetch(`/api/stripe/connect/status?teamId=${teamId}`, { cache: "no-store" });
+    const text = await res.text();
+    let json: any = {};
+    try {
+      json = JSON.parse(text);
+    } catch {}
+
+    if (!res.ok) throw new Error(json?.error || text || "Failed to refresh Stripe status");
+
+    // Update teams list so status card updates immediately
+    setTeams((prev) =>
+      prev.map((t) =>
+        t.id === teamId
+          ? {
+              ...t,
+              stripe_account_id: json.stripe_account_id ?? t.stripe_account_id,
+              stripe_charges_enabled: json.charges_enabled ?? t.stripe_charges_enabled,
+              stripe_card_payments: json.card_payments ?? t.stripe_card_payments,
+            }
+          : t
+      )
+    );
+  }
+
   // Init + teams
   useEffect(() => {
     let cancelled = false;
@@ -272,9 +299,7 @@ export default function DashboardPage() {
 
       const { data: teamRows, error: teamErr } = await supabase
         .from("teams")
-        .select(
-          "id, name, expected_players, stripe_account_id, stripe_charges_enabled, stripe_card_payments, archived_at"
-        )
+        .select("id, name, expected_players, stripe_account_id, stripe_charges_enabled, stripe_card_payments, archived_at")
         .eq("manager_id", data.user.id)
         .is("archived_at", null)
         .order("created_at", { ascending: false });
@@ -304,6 +329,34 @@ export default function DashboardPage() {
     loadTeamData(selectedTeamId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedTeamId]);
+
+  // ✅ NEW: handle Stripe redirect return/refresh
+  useEffect(() => {
+    const connect = sp.get("connect");
+    const teamIdFromUrl = sp.get("teamId");
+
+    if (!connect || !teamIdFromUrl) return;
+    if (connect !== "return" && connect !== "refresh") return;
+
+    // Select the team involved in the callback
+    setSelectedTeamId(teamIdFromUrl);
+
+    (async () => {
+      try {
+        setBusy(true);
+        setError(null);
+        await refreshStripeStatus(teamIdFromUrl);
+        await loadTeamData(teamIdFromUrl);
+      } catch (e: any) {
+        setError(e?.message ?? "Failed to refresh Stripe status");
+      } finally {
+        setBusy(false);
+      }
+    })();
+
+    // Note: no dependency on functions to avoid reruns
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sp]);
 
   // Notifications badge polling
   useEffect(() => {
@@ -521,6 +574,24 @@ export default function DashboardPage() {
                   >
                     Configure
                   </button>
+
+                  <button
+                    onClick={async () => {
+                      if (!selectedTeamId) return;
+                      try {
+                        setBusy(true);
+                        await refreshStripeStatus(selectedTeamId);
+                      } catch (e: any) {
+                        setError(e?.message ?? "Failed to refresh Stripe");
+                      } finally {
+                        setBusy(false);
+                      }
+                    }}
+                    disabled={!selectedTeamId || busy}
+                    className="mt-2 w-full rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 transition-colors"
+                  >
+                    {busy ? "Refreshing..." : "Refresh status"}
+                  </button>
                 </div>
               </div>
             </div>
@@ -599,9 +670,7 @@ export default function DashboardPage() {
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between p-6 border-b border-gray-100">
                 <div>
                   <h3 className="text-lg font-semibold text-gray-900">Players</h3>
-                  <p className="text-sm text-gray-500">
-                    Send reminders, mark payments, or set custom amounts per player.
-                  </p>
+                  <p className="text-sm text-gray-500">Send reminders, mark payments, or set custom amounts per player.</p>
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2">
@@ -625,9 +694,7 @@ export default function DashboardPage() {
               {memberships.length === 0 ? (
                 <div className="p-12 text-center">
                   <p className="text-gray-600 font-medium">No players yet</p>
-                  <p className="mt-1 text-sm text-gray-500">
-                    Players appear after they join and make their first payment.
-                  </p>
+                  <p className="mt-1 text-sm text-gray-500">Players appear after they join and make their first payment.</p>
                 </div>
               ) : (
                 <div className="overflow-x-auto">
