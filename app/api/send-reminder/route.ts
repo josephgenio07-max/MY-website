@@ -6,14 +6,7 @@ import { Redis } from "@upstash/redis";
 import { bulkReminderSchema } from "../../../lib/validation";
 
 export const runtime = "nodejs";
-
-export async function GET() {
-  return NextResponse.json({
-    ok: true,
-    route: "send-reminder alive",
-    serverSupabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL ?? null,
-  });
-}
+export const dynamic = "force-dynamic";
 
 const admin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -53,42 +46,60 @@ function isUuid(id: string) {
   );
 }
 
+function twilioClient() {
+  const sid = process.env.TWILIO_ACCOUNT_SID;
+  const token = process.env.TWILIO_AUTH_TOKEN;
+  if (!sid || !token) throw new Error("Missing TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN");
+  return twilio(sid, token);
+}
+
 async function sendWhatsApp(toE164: string, body: string) {
-  const client = twilio(
-    process.env.TWILIO_ACCOUNT_SID!,
-    process.env.TWILIO_AUTH_TOKEN!
-  );
+  const from = process.env.TWILIO_WHATSAPP_FROM;
+  if (!from) throw new Error("Missing TWILIO_WHATSAPP_FROM");
+  const client = twilioClient();
+
   const msg = await client.messages.create({
-    from: process.env.TWILIO_WHATSAPP_FROM!,
+    from,
     to: `whatsapp:${toE164}`,
     body,
   });
+
   return { providerId: msg.sid };
 }
 
 async function sendSms(toE164: string, body: string) {
-  const client = twilio(
-    process.env.TWILIO_ACCOUNT_SID!,
-    process.env.TWILIO_AUTH_TOKEN!
-  );
+  const from = process.env.TWILIO_SMS_FROM;
+  if (!from) throw new Error("Missing TWILIO_SMS_FROM");
+  const client = twilioClient();
+
   const msg = await client.messages.create({
-    from: process.env.TWILIO_SMS_FROM!,
+    from,
     to: toE164,
     body,
   });
+
   return { providerId: msg.sid };
 }
 
-async function sendEmail(toEmail: string, subject: string, body: string) {
-  console.log("📧 Sending email (stub) to:", toEmail, subject);
+async function sendEmailStub(toEmail: string, subject: string, body: string) {
+  // plug Resend later (you already have it elsewhere)
+  console.log("📧 Email stub:", { toEmail, subject, bodyPreview: body.slice(0, 60) });
   return { providerId: `email_${Date.now()}` };
+}
+
+export async function GET() {
+  return NextResponse.json({
+    ok: true,
+    route: "send-reminder alive",
+    serverSupabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL ?? null,
+  });
 }
 
 export async function POST(req: Request) {
   console.log("🔥 HIT /api/send-reminder POST");
 
   try {
-    // Rate limit
+    // --- Rate limit ---
     const ip =
       req.headers.get("x-forwarded-for") ||
       req.headers.get("x-real-ip") ||
@@ -102,9 +113,9 @@ export async function POST(req: Request) {
       );
     }
 
-    // Validate body
-    const body = await req.json();
-    const validation = bulkReminderSchema.safeParse(body);
+    // --- Validate body ---
+    const rawBody = await req.json();
+    const validation = bulkReminderSchema.safeParse(rawBody);
 
     if (!validation.success) {
       return NextResponse.json(
@@ -116,7 +127,11 @@ export async function POST(req: Request) {
     const { teamId, message, kind, target } = validation.data;
     console.log("POST payload:", { teamId, kind, targetMode: target.mode });
 
-    // Auth
+    if (!isUuid(teamId)) {
+      return NextResponse.json({ error: "Bad teamId" }, { status: 400 });
+    }
+
+    // --- Auth (manager) ---
     const authHeader = req.headers.get("authorization") || "";
     const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
 
@@ -134,10 +149,10 @@ export async function POST(req: Request) {
 
     const managerId = userData.user.id;
 
-    // Team lookup
+    // --- Team ownership ---
     const { data: teamRow, error: teamErr } = await admin
       .from("teams")
-      .select("id, manager_id, name, weekly_amount")
+      .select("id, manager_id, name")
       .eq("id", teamId)
       .maybeSingle();
 
@@ -147,17 +162,40 @@ export async function POST(req: Request) {
         { status: 500 }
       );
     }
-
     if (!teamRow) {
       return NextResponse.json({ error: "Team not found" }, { status: 404 });
     }
-
     if (teamRow.manager_id !== managerId) {
       return NextResponse.json({ error: "Not allowed" }, { status: 403 });
     }
 
-    // Membership selection
+    // --- Team plan (default amount) ---
+    const { data: planRow, error: planErr } = await admin
+      .from("team_plans")
+      .select("amount, currency, interval")
+      .eq("team_id", teamId)
+      .eq("active", true)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (planErr) {
+      return NextResponse.json(
+        { error: "Plan lookup failed", details: planErr.message },
+        { status: 500 }
+      );
+    }
+
+    // amount is stored in cents in your setup page
+    const planAmountCents = Number(planRow?.amount ?? 0);
+    const planCurrency = String(planRow?.currency ?? "gbp");
+    const planAmountGBP = planAmountCents > 0 ? (planAmountCents / 100) : 5;
+
+    // --- Membership selection ---
     let memberships: any[] = [];
+
+    const baseSelect =
+      "id, team_id, status, next_due_at, player_id, custom_amount_gbp, player:players(id, name, email, phone_e164, reminder_consent)";
 
     if (target.mode === "single") {
       if (!isUuid(target.membershipId)) {
@@ -169,9 +207,7 @@ export async function POST(req: Request) {
 
       const { data, error } = await admin
         .from("memberships")
-        .select(
-          "id, team_id, status, next_due_date, player_id, player:players(id, name, email, phone_e164, reminder_consent)"
-        )
+        .select(baseSelect)
         .eq("id", target.membershipId)
         .eq("team_id", teamId)
         .limit(1);
@@ -182,15 +218,14 @@ export async function POST(req: Request) {
           { status: 500 }
         );
       }
+
       memberships = data ?? [];
     }
 
     if (target.mode === "unpaid") {
       const { data, error } = await admin
         .from("memberships")
-        .select(
-          "id, team_id, status, next_due_date, player_id, player:players(id, name, email, phone_e164, reminder_consent)"
-        )
+        .select(baseSelect)
         .eq("team_id", teamId)
         .in("status", ["due", "overdue"]);
 
@@ -200,6 +235,7 @@ export async function POST(req: Request) {
           { status: 500 }
         );
       }
+
       memberships = data ?? [];
     }
 
@@ -211,13 +247,11 @@ export async function POST(req: Request) {
 
       const { data, error } = await admin
         .from("memberships")
-        .select(
-          "id, team_id, status, next_due_date, player_id, player:players(id, name, email, phone_e164, reminder_consent)"
-        )
+        .select(baseSelect)
         .eq("team_id", teamId)
         .eq("status", "active")
-        .not("next_due_date", "is", null)
-        .lte("next_due_date", until);
+        .not("next_due_at", "is", null)
+        .lte("next_due_at", until);
 
       if (error) {
         return NextResponse.json(
@@ -225,23 +259,29 @@ export async function POST(req: Request) {
           { status: 500 }
         );
       }
+
       memberships = data ?? [];
     }
 
     const origin = getOrigin(req).replace(/\/$/, "");
 
-    const results: { membershipId: string; sent: boolean; reason?: string }[] =
-      [];
+    const results: { membershipId: string; sent: boolean; reason?: string }[] = [];
 
     for (const m of memberships) {
-      const membershipId = m.id as string;
+      const membershipId = String(m.id ?? "");
       const player = m.player;
+
+      if (!membershipId || !isUuid(membershipId)) {
+        results.push({ membershipId: membershipId || "unknown", sent: false, reason: "bad_membership" });
+        continue;
+      }
 
       if (!player?.reminder_consent) {
         results.push({ membershipId, sent: false, reason: "no_consent" });
         continue;
       }
 
+      // Cooldown check (your function currently returns true, but keep this anyway)
       const { data: ok, error: okErr } = await admin.rpc("can_send_reminder", {
         p_membership_id: membershipId,
         p_cooldown_days: 7,
@@ -252,67 +292,118 @@ export async function POST(req: Request) {
         continue;
       }
 
-      // ✅ FIXED: link uses real origin (not env)
       const paymentLink = `${origin}/pay/${membershipId}`;
 
-      const amount = m.custom_amount_gbp ?? teamRow.weekly_amount ?? 5;
-      const dueDate = m.next_due_date
-        ? new Date(m.next_due_date).toLocaleDateString("en-GB")
+      const amountGBP =
+        m.custom_amount_gbp !== null && m.custom_amount_gbp !== undefined
+          ? Number(m.custom_amount_gbp)
+          : Number.isFinite(planAmountGBP)
+          ? planAmountGBP
+          : 5;
+
+      const dueDate = m.next_due_at
+        ? new Date(m.next_due_at).toLocaleDateString("en-GB")
         : "soon";
 
       const msgBody =
         message && message.trim()
-          ? `${message.trim()}\n\n---\nAmount: £${amount}\nDue: ${dueDate}\n\nPay here: ${paymentLink}`
-          : `Hi ${player.name}, your payment for ${teamRow.name} is due.\n\nAmount: £${amount}\nDue: ${dueDate}\n\nPay here: ${paymentLink}`;
+          ? `${message.trim()}\n\n---\nAmount: £${amountGBP}\nDue: ${dueDate}\n\nPay here: ${paymentLink}`
+          : `Hi ${player.name}, your payment for ${teamRow.name} is due.\n\nAmount: £${amountGBP}\nDue: ${dueDate}\n\nPay here: ${paymentLink}`;
+
+      // Decide initial channel we *intend* to use (for logging)
+      let intendedChannel: "whatsapp" | "sms" | "email" = player.phone_e164 ? "whatsapp" : "email";
+
+      // 1) Create reminder log FIRST (RPC)
+      const { data: reminderId, error: createErr } = await admin.rpc("create_manual_reminder", {
+        p_team_id: teamId,
+        p_player_id: player.id,
+        p_channel: intendedChannel,
+        p_message: msgBody,
+      });
+
+      if (createErr || !reminderId) {
+        // if we can't log, do NOT send (otherwise you'll have untracked messages)
+        results.push({ membershipId, sent: false, reason: "log_failed" });
+        continue;
+      }
 
       let sent = false;
-      let channel = "none";
+      let channel: "whatsapp" | "sms" | "email" | "none" = "none";
+      let providerId: string | null = null;
 
-      if (player.phone_e164) {
-        try {
-          await sendWhatsApp(player.phone_e164, msgBody);
-          channel = "whatsapp";
-          sent = true;
-        } catch (waErr) {
-          console.log("WhatsApp failed, trying SMS:", waErr);
+      try {
+        // 2) Try WhatsApp → fallback SMS → fallback email
+        if (player.phone_e164) {
           try {
-            await sendSms(player.phone_e164, msgBody);
-            channel = "sms";
+            const r = await sendWhatsApp(player.phone_e164, msgBody);
+            channel = "whatsapp";
+            providerId = r.providerId;
             sent = true;
-          } catch (smsErr) {
-            console.log("SMS failed:", smsErr);
+          } catch (waErr) {
+            console.log("WhatsApp failed, trying SMS:", waErr);
+            try {
+              const r = await sendSms(player.phone_e164, msgBody);
+              channel = "sms";
+              providerId = r.providerId;
+              sent = true;
+            } catch (smsErr) {
+              console.log("SMS failed:", smsErr);
+            }
           }
         }
-      }
 
-      if (!sent && player.email) {
-        try {
-          await sendEmail(
-            player.email,
-            `Payment Reminder - ${teamRow.name}`,
-            msgBody
-          );
-          channel = "email";
-          sent = true;
-        } catch (emailErr) {
-          console.log("Email failed:", emailErr);
+        if (!sent && player.email) {
+          try {
+            const r = await sendEmailStub(
+              player.email,
+              `Payment Reminder - ${teamRow.name}`,
+              msgBody
+            );
+            channel = "email";
+            providerId = r.providerId;
+            sent = true;
+          } catch (emailErr) {
+            console.log("Email failed:", emailErr);
+          }
         }
-      }
 
-      if (sent) {
-        await admin.from("reminder_logs").insert({
-          team_id: teamId,
-          membership_id: membershipId,
-          player_id: player?.id ?? null,
-          channel,
-          kind,
-          message: msgBody,
-          status: "sent",
+        // 3) Update channel if it changed vs intended
+        if (channel !== "none" && channel !== intendedChannel) {
+          await admin.from("reminder_logs").update({ channel }).eq("id", reminderId);
+        }
+
+        // 4) Finish reminder log (RPC)
+        if (sent) {
+          await admin.rpc("finish_reminder", {
+            p_id: reminderId,
+            p_status: "sent",
+            p_provider_id: providerId,
+            p_error: null,
+          });
+
+          results.push({ membershipId, sent: true });
+        } else {
+          await admin.from("reminder_logs").update({ channel: "none" }).eq("id", reminderId);
+
+          await admin.rpc("finish_reminder", {
+            p_id: reminderId,
+            p_status: "failed",
+            p_provider_id: null,
+            p_error: "delivery_failed",
+          });
+
+          results.push({ membershipId, sent: false, reason: "delivery_failed" });
+        }
+      } catch (err: any) {
+        // If anything unexpected happens mid-flight, finish log as failed
+        await admin.rpc("finish_reminder", {
+          p_id: reminderId,
+          p_status: "failed",
+          p_provider_id: null,
+          p_error: err?.message ?? "unexpected_error",
         });
 
-        results.push({ membershipId, sent: true });
-      } else {
-        results.push({ membershipId, sent: false, reason: "delivery_failed" });
+        results.push({ membershipId, sent: false, reason: "unexpected_error" });
       }
     }
 
@@ -325,7 +416,7 @@ export async function POST(req: Request) {
   } catch (e: any) {
     console.error("Error in send-reminder:", e);
     return NextResponse.json(
-      { error: e.message || "Internal error" },
+      { error: e?.message || "Internal error" },
       { status: 500 }
     );
   }

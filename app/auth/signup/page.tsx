@@ -50,7 +50,7 @@ export default function SignUpPage() {
         email: trimmedEmail,
         password,
         options: {
-          // ✅ CRITICAL: ensures the email verification link lands on a REAL route in your app
+          // ✅ CRITICAL: verification link lands back inside your app
           emailRedirectTo: `${window.location.origin}/auth/callback`,
           data: {
             display_name: trimmedName || null,
@@ -60,16 +60,14 @@ export default function SignUpPage() {
 
       if (signUpError) throw signUpError;
 
-      // If confirmation is ON, user must verify.
-      // If confirmation is OFF, you can send them straight into the app.
-      if (data.user) {
-        if ((data.user as any).confirmed_at) {
-          router.push("/team/setup");
-        } else {
-          router.push("/auth/verify-email");
-        }
+      // Supabase behaviour:
+      // - If email confirmations ON → user exists but session may be null (needs verify)
+      // - If OFF → session exists immediately
+      const confirmedAt = (data.user as any)?.confirmed_at;
+
+      if (confirmedAt || data.session) {
+        router.push("/team/setup");
       } else {
-        // Rare case: no user returned
         router.push("/auth/verify-email");
       }
     } catch (err: any) {
@@ -82,7 +80,9 @@ export default function SignUpPage() {
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col justify-center py-12 sm:px-6 lg:px-8">
       <div className="sm:mx-auto sm:w-full sm:max-w-md">
-        <h2 className="text-center text-3xl font-bold text-gray-900">Create your account</h2>
+        <h2 className="text-center text-3xl font-bold text-gray-900">
+          Create your account
+        </h2>
         <p className="mt-2 text-center text-sm text-gray-600">
           Already have an account?{" "}
           <Link href="/auth/login" className="font-medium text-gray-900 hover:text-gray-700">
