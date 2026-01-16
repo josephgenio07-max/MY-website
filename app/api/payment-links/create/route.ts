@@ -2,82 +2,97 @@ import { NextResponse } from "next/server";
 import { createSupabaseServerClient } from "@/lib/supabaseServer";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 
-function makeToken(len = 40) {
+function makeToken(len = 24) {
+  // URL-safe token (letters + numbers)
   const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
   let out = "";
   for (let i = 0; i < len; i++) out += chars[Math.floor(Math.random() * chars.length)];
   return out;
 }
 
-type Interval = "week" | "month" | "quarter";
-type BillingType = "one_off" | "subscription";
-
 export async function POST(req: Request) {
   try {
+    // Auth (cookie session)
     const supabase = await createSupabaseServerClient();
-    const { data } = await supabase.auth.getUser();
+    const { data: authData, error: authErr } = await supabase.auth.getUser();
 
-    if (!data.user) {
+    if (authErr) {
+      return NextResponse.json({ error: authErr.message }, { status: 401 });
+    }
+    if (!authData.user) {
       return NextResponse.json({ error: "Not logged in" }, { status: 401 });
     }
 
-    const body = await req.json();
-    const teamId = String(body.teamId || "").trim();
-    const amountCents = Number(body.amountCents);
-    const billingType = body.billingType as BillingType;
-    const interval = body.interval as Interval;
-    const dueAt = body.dueAt ? String(body.dueAt) : null;
-
+    const body = await req.json().catch(() => ({}));
+    const teamId = String(body?.teamId || "").trim();
     if (!teamId) return NextResponse.json({ error: "Missing teamId" }, { status: 400 });
-    if (!Number.isFinite(amountCents) || amountCents <= 0)
-      return NextResponse.json({ error: "Invalid amount" }, { status: 400 });
-    if (!["one_off", "subscription"].includes(billingType))
-      return NextResponse.json({ error: "Invalid billing type" }, { status: 400 });
-    if (!["week", "month", "quarter"].includes(interval))
-      return NextResponse.json({ error: "Invalid interval" }, { status: 400 });
 
-    // verify manager owns team
+    // Verify manager owns team
     const { data: team, error: teamErr } = await supabaseAdmin
       .from("teams")
       .select("id, manager_id")
       .eq("id", teamId)
       .maybeSingle();
 
-    if (teamErr || !team) return NextResponse.json({ error: "Team not found" }, { status: 404 });
-    if (team.manager_id !== data.user.id)
+    if (teamErr) return NextResponse.json({ error: teamErr.message }, { status: 400 });
+    if (!team) return NextResponse.json({ error: "Team not found" }, { status: 404 });
+    if (team.manager_id !== authData.user.id) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
 
-    // use plan currency as default
-    const { data: plan, error: planErr } = await supabaseAdmin
-      .from("team_plans")
-      .select("interval, currency")
+    // If an active link already exists, return it (so managers don’t spam-create links)
+    const { data: existing, error: existErr } = await supabaseAdmin
+      .from("payment_links")
+      .select("token")
       .eq("team_id", teamId)
       .eq("active", true)
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle();
 
-    if (planErr || !plan?.currency) {
-      return NextResponse.json({ error: planErr?.message || "Active plan not found" }, { status: 400 });
-    }
+    if (existErr) return NextResponse.json({ error: existErr.message }, { status: 400 });
+    if (existing?.token) return NextResponse.json({ token: existing.token });
 
-    const token = makeToken(40);
+    // Create new link (players choose one-off vs subscription on the public page)
+    const token = makeToken(24);
 
     const { error: insErr } = await supabaseAdmin.from("payment_links").insert({
       team_id: teamId,
       token,
-      amount: amountCents,
-      currency: plan.currency ?? "gbp",
-      interval: plan.interval ?? "month", // plan
-      interval_override: interval, // manager choice (requires column)
-      due_at: dueAt,               // manager choice (requires column)
-      billing_type: billingType,
       active: true,
-      max_uses: 1,
-      uses: 0,
+
+      // Option A UX defaults (requires these columns; remove if your table doesn’t have them)
+      allow_one_off: true,
+      allow_subscription: true,
+      allow_custom_amount: true,
+      default_amount_gbp: null,
+      min_amount_gbp: 1,
+      max_amount_gbp: 200,
     });
 
-    if (insErr) return NextResponse.json({ error: insErr.message }, { status: 500 });
+    if (insErr) {
+      // If your table does NOT have the allow_* / min/max columns, fallback insert:
+      const msg = insErr.message || "";
+      if (
+        msg.includes("allow_one_off") ||
+        msg.includes("allow_subscription") ||
+        msg.includes("allow_custom_amount") ||
+        msg.includes("default_amount_gbp") ||
+        msg.includes("min_amount_gbp") ||
+        msg.includes("max_amount_gbp")
+      ) {
+        const { error: insErr2 } = await supabaseAdmin.from("payment_links").insert({
+          team_id: teamId,
+          token,
+          active: true,
+        });
+
+        if (insErr2) return NextResponse.json({ error: insErr2.message }, { status: 500 });
+        return NextResponse.json({ token });
+      }
+
+      return NextResponse.json({ error: insErr.message }, { status: 500 });
+    }
 
     return NextResponse.json({ token });
   } catch (e: any) {

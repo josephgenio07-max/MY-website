@@ -8,7 +8,7 @@ import supabase from "@/lib/supabase";
 import SendBulkReminderButton from "./reminders/SendBulkReminderButton";
 import SendSingleReminderButton from "./reminders/SendSingleReminderButton";
 import MarkPaidButton from "./MarkPaidButton";
-import SetCustomAmountButton from "./components/SetCustomAmountButton";
+
 
 export const dynamic = "force-dynamic";
 
@@ -964,11 +964,6 @@ function DashboardInner() {
                                     defaultAmountCents={plan?.amount ?? 0}
                                     currency={(plan?.currency ?? "gbp") as string}
                                   />
-                                  <SetCustomAmountButton
-                                    membershipId={m.id}
-                                    currentAmount={m.custom_amount_gbp}
-                                    teamDefaultAmount={teamDefaultGBP}
-                                  />
                                 </div>
                               </>
                             ) : (
@@ -1041,12 +1036,6 @@ function DashboardInner() {
                                         playerId={p.id}
                                         defaultAmountCents={plan?.amount ?? 0}
                                         currency={(plan?.currency ?? "gbp") as string}
-                                      />
-
-                                      <SetCustomAmountButton
-                                        membershipId={m.id}
-                                        currentAmount={m.custom_amount_gbp}
-                                        teamDefaultAmount={teamDefaultGBP}
                                       />
                                     </>
                                   ) : (
