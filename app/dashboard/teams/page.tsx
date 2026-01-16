@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import supabase from "@/lib/supabase";
 
 type Team = {
@@ -25,6 +25,8 @@ function formatShortDate(iso?: string | null) {
 
 export default function TeamsPage() {
   const router = useRouter();
+  const sp = useSearchParams();
+  const returnTo = (sp.get("returnTo") || "/settings").trim();
 
   const [teams, setTeams] = useState<Team[]>([]);
   const [meta, setMeta] = useState<Record<string, TeamMeta>>({});
@@ -44,6 +46,26 @@ export default function TeamsPage() {
       return null;
     }
     return data.user;
+  }
+
+  async function getPlayersCount(teamId: string) {
+    const { count, error } = await supabase
+      .from("memberships")
+      .select("id", { count: "exact", head: true })
+      .eq("team_id", teamId);
+
+    if (error) return 999999;
+    return count ?? 0;
+  }
+
+  async function getPaymentsCount(teamId: string) {
+    const { count, error } = await supabase
+      .from("payments")
+      .select("id", { count: "exact", head: true })
+      .eq("team_id", teamId);
+
+    if (error) return 999999;
+    return count ?? 0;
   }
 
   async function load() {
@@ -71,43 +93,17 @@ export default function TeamsPage() {
     const list = (rows ?? []) as Team[];
     setTeams(list);
 
+    // NOTE: This is N+1. Works for now, but if you have many teams, switch to a single RPC later.
     const metaEntries: Array<[string, TeamMeta]> = [];
-
     for (const t of list) {
       const playersCount = await getPlayersCount(t.id);
       const paymentsCount = await getPaymentsCount(t.id);
-
       metaEntries.push([
         t.id,
-        {
-          playersCount,
-          paymentsCount,
-          canDelete: playersCount === 0 && paymentsCount === 0,
-        },
+        { playersCount, paymentsCount, canDelete: playersCount === 0 && paymentsCount === 0 },
       ]);
     }
-
     setMeta(Object.fromEntries(metaEntries));
-  }
-
-  async function getPlayersCount(teamId: string) {
-    const { count, error } = await supabase
-      .from("memberships")
-      .select("id", { count: "exact", head: true })
-      .eq("team_id", teamId);
-
-    if (error) return 999999;
-    return count ?? 0;
-  }
-
-  async function getPaymentsCount(teamId: string) {
-    const { count, error } = await supabase
-      .from("payments")
-      .select("id", { count: "exact", head: true })
-      .eq("team_id", teamId);
-
-    if (error) return 999999;
-    return count ?? 0;
   }
 
   useEffect(() => {
@@ -123,7 +119,6 @@ export default function TeamsPage() {
     const { error } = await supabase.from("teams").update({ archived_at: next }).eq("id", team.id);
 
     if (error) setErr(error.message);
-
     await load();
     setBusyId(null);
   }
@@ -176,10 +171,10 @@ export default function TeamsPage() {
   }
 
   return (
-    <main className="min-h-screen bg-gray-50 px-4 py-10">
+    <main className="min-h-[100dvh] bg-gray-50 px-4 py-6 sm:py-10">
       <div className="mx-auto w-full max-w-3xl space-y-4">
-        <div className="rounded-2xl bg-white p-6 shadow-sm border border-gray-100">
-          <div className="flex items-center justify-between gap-3">
+        <div className="rounded-2xl bg-white p-5 sm:p-6 shadow-sm border border-gray-100">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div>
               <h1 className="text-xl font-semibold text-gray-900">Manage Teams</h1>
               <p className="mt-1 text-sm text-gray-600">
@@ -187,7 +182,7 @@ export default function TeamsPage() {
               </p>
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <button
                 onClick={() => setShowArchived((v) => !v)}
                 className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-900 hover:bg-gray-50"
@@ -196,7 +191,7 @@ export default function TeamsPage() {
               </button>
 
               <button
-                onClick={() => router.push("/dashboard")}
+                onClick={() => router.push(returnTo)}
                 className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-900 hover:bg-gray-50"
               >
                 Back
@@ -205,9 +200,7 @@ export default function TeamsPage() {
           </div>
         </div>
 
-        {err && (
-          <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">{err}</div>
-        )}
+        {err && <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">{err}</div>}
 
         <div className="rounded-2xl bg-white shadow-sm border border-gray-100 overflow-hidden">
           {teams.length === 0 ? (
@@ -220,20 +213,19 @@ export default function TeamsPage() {
                 const m = meta[t.id];
 
                 return (
-                  <li key={t.id} className="p-4 flex items-center justify-between gap-4">
+                  <li key={t.id} className="p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                     <div className="min-w-0">
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 min-w-0">
                         {!isEditing ? (
                           <div className="font-medium text-gray-900 truncate">
-                            {t.name}{" "}
-                            {t.archived_at ? <span className="text-xs text-gray-500">(Archived)</span> : null}
+                            {t.name} {t.archived_at ? <span className="text-xs text-gray-500">(Archived)</span> : null}
                           </div>
                         ) : (
                           <input
                             value={draftName}
                             onChange={(e) => setDraftName(e.target.value)}
                             disabled={isBusy}
-                            className="w-64 max-w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm"
+                            className="w-full sm:w-64 max-w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm"
                           />
                         )}
                       </div>
@@ -245,12 +237,9 @@ export default function TeamsPage() {
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-2 shrink-0">
+                    <div className="flex flex-wrap items-center gap-2 shrink-0">
                       <button
-                        onClick={() => {
-                          localStorage.setItem("selectedTeamId", t.id);
-                          router.push("/dashboard");
-                        }}
+                        onClick={() => router.push(`/dashboard?teamId=${t.id}`)}
                         className="rounded-lg bg-gray-900 px-3 py-2 text-sm font-medium text-white hover:bg-gray-800"
                       >
                         Open
@@ -298,10 +287,10 @@ export default function TeamsPage() {
                           !m
                             ? "Checking delete rules…"
                             : m.playersCount > 0
-                              ? "Delete disabled: remove players first"
-                              : m.paymentsCount > 0
-                                ? "Delete disabled: payment history exists (archive instead)"
-                                : "Delete team"
+                            ? "Delete disabled: remove players first"
+                            : m.paymentsCount > 0
+                            ? "Delete disabled: payment history exists (archive instead)"
+                            : "Delete team"
                         }
                         className={`rounded-lg border px-3 py-2 text-sm font-medium ${
                           m?.canDelete

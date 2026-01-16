@@ -1,10 +1,8 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import supabase from "@/lib/supabase";
-
-/* ---------------- Preferences ---------------- */
 
 type Prefs = {
   emailAlerts: boolean;
@@ -37,9 +35,7 @@ function safeLoadPrefs(): Prefs {
 function safeSavePrefs(p: Prefs) {
   try {
     window.localStorage.setItem(LS_KEY, JSON.stringify(p));
-  } catch {
-    // ignore
-  }
+  } catch {}
 }
 
 function ToggleRow({
@@ -110,10 +106,11 @@ function ActionCard({
   );
 }
 
-/* ---------------- Page ---------------- */
-
 export default function SettingsPage() {
   const router = useRouter();
+  const sp = useSearchParams();
+
+  const returnTo = (sp.get("returnTo") || "/dashboard").trim();
 
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -131,7 +128,6 @@ export default function SettingsPage() {
   }, [email]);
 
   useEffect(() => {
-    // load prefs safely after mount (mobile + avoids any hydration nonsense)
     setPrefs(safeLoadPrefs());
     setPrefsLoaded(true);
   }, []);
@@ -206,31 +202,25 @@ export default function SettingsPage() {
 
   return (
     <main className="min-h-[100dvh] bg-gray-50">
-      {/* Mobile-first header */}
       <header className="sticky top-0 z-50 border-b border-gray-200 bg-white/90 backdrop-blur">
         <div className="mx-auto max-w-3xl px-4 sm:px-6 py-4">
           <div className="flex items-center gap-3">
             <button
-              onClick={() => router.back()}
+              onClick={() => router.push(returnTo)}
               className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm font-medium hover:bg-gray-50"
             >
               Back
             </button>
 
             <div className="min-w-0">
-              <h1 className="text-xl sm:text-2xl font-bold text-gray-900">
-                Settings
-              </h1>
-              <p className="text-sm text-gray-600">
-                Account, teams, notifications, feedback
-              </p>
+              <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Settings</h1>
+              <p className="text-sm text-gray-600">Account, teams, notifications, feedback</p>
             </div>
           </div>
         </div>
       </header>
 
       <div className="mx-auto max-w-3xl px-4 sm:px-6 py-6 sm:py-8 space-y-6 pb-10">
-        {/* Quick actions (THIS is what your mobile was missing) */}
         <section className="space-y-3">
           <ActionCard
             icon="🏠"
@@ -242,13 +232,13 @@ export default function SettingsPage() {
             icon="👥"
             title="Manage Teams"
             desc="Create, edit, archive or delete teams."
-            onClick={() => router.push("/dashboard/teams")}
+            onClick={() => router.push("/dashboard/teams?returnTo=/settings")}
           />
           <ActionCard
             icon="🔔"
             title="Notifications"
             desc="View reminders, updates, and system alerts."
-            onClick={() => router.push("/notifications")}
+            onClick={() => router.push("/notifications?returnTo=/settings")}
           />
           <ActionCard
             icon="💬"
@@ -261,28 +251,19 @@ export default function SettingsPage() {
           />
         </section>
 
-        {/* Account */}
         <section className="rounded-3xl bg-white p-5 sm:p-6 shadow-sm border border-gray-100">
           <h2 className="text-lg font-semibold text-gray-900">Account</h2>
           <p className="mt-1 text-sm text-gray-600">Your login details.</p>
 
           <div className="mt-4 space-y-3">
             <div className="rounded-2xl bg-gray-50 p-4">
-              <p className="text-xs uppercase tracking-wide text-gray-500">
-                Email
-              </p>
-              <p className="mt-1 text-sm font-semibold text-gray-900 break-all">
-                {email || "Unknown"}
-              </p>
+              <p className="text-xs uppercase tracking-wide text-gray-500">Email</p>
+              <p className="mt-1 text-sm font-semibold text-gray-900 break-all">{email || "Unknown"}</p>
             </div>
 
             <div className="rounded-2xl bg-gray-50 p-4">
-              <p className="text-xs uppercase tracking-wide text-gray-500">
-                Account created
-              </p>
-              <p className="mt-1 text-sm font-semibold text-gray-900">
-                {createdAt || "Unknown"}
-              </p>
+              <p className="text-xs uppercase tracking-wide text-gray-500">Account created</p>
+              <p className="mt-1 text-sm font-semibold text-gray-900">{createdAt || "Unknown"}</p>
             </div>
           </div>
 
@@ -296,9 +277,7 @@ export default function SettingsPage() {
             </button>
 
             <button
-              onClick={() =>
-                (window.location.href = "mailto:support@yourapp.com?subject=Delete%20my%20account")
-              }
+              onClick={() => (window.location.href = "mailto:support@yourapp.com?subject=Delete%20my%20account")}
               className="rounded-2xl border border-gray-200 bg-white px-4 py-3 text-sm font-semibold hover:bg-gray-50"
             >
               Delete account
@@ -306,16 +285,11 @@ export default function SettingsPage() {
           </div>
         </section>
 
-        {/* Preferences */}
         <section className="rounded-3xl bg-white p-5 sm:p-6 shadow-sm border border-gray-100">
           <div className="flex items-start justify-between gap-3">
             <div>
-              <h2 className="text-lg font-semibold text-gray-900">
-                Notification Preferences
-              </h2>
-              <p className="mt-1 text-sm text-gray-600">
-                Stored on this device for now.
-              </p>
+              <h2 className="text-lg font-semibold text-gray-900">Notification Preferences</h2>
+              <p className="mt-1 text-sm text-gray-600">Stored on this device for now.</p>
             </div>
 
             <button
@@ -361,7 +335,6 @@ export default function SettingsPage() {
           </div>
         </section>
 
-        {/* Logout */}
         <section className="rounded-3xl bg-white p-5 sm:p-6 shadow-sm border border-gray-100">
           <button
             onClick={handleLogout}
