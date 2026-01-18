@@ -1,5 +1,8 @@
 "use client";
 
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 import React, { useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabaseBrowser } from "@/lib/supabase-browser";
@@ -178,6 +181,7 @@ export default function SetupPage() {
 
       if (linkError) throw linkError;
 
+      // Safe: only runs in browser after creation
       setJoinLink(`${window.location.origin}/join/${token}`);
     } catch (err: any) {
       setError(err?.message || "Failed to create team.");
@@ -200,7 +204,6 @@ export default function SetupPage() {
   return (
     <main className="min-h-[100dvh] bg-gray-50 px-4 py-10">
       <div className="mx-auto w-full max-w-2xl rounded-2xl bg-white p-5 sm:p-8 shadow-sm border border-gray-200">
-        {/* ✅ Always-visible back button */}
         <div className="mb-4">
           <button
             type="button"
@@ -270,7 +273,11 @@ export default function SetupPage() {
               {interval === "week" && (
                 <div>
                   <label className="block text-sm font-semibold text-gray-900">Due weekday</label>
-                  <select className={selectCls} value={dueWeekday} onChange={(e) => setDueWeekday(Number(e.target.value))}>
+                  <select
+                    className={selectCls}
+                    value={dueWeekday}
+                    onChange={(e) => setDueWeekday(Number(e.target.value))}
+                  >
                     <option value={1}>Monday</option>
                     <option value={2}>Tuesday</option>
                     <option value={3}>Wednesday</option>
@@ -319,17 +326,32 @@ export default function SetupPage() {
 
             <div className="mt-3 space-y-3">
               <label className="flex items-center gap-3 text-sm font-medium text-gray-900">
-                <input className={checkboxCls} type="checkbox" checked={enableCard} onChange={(e) => setEnableCard(e.target.checked)} />
+                <input
+                  className={checkboxCls}
+                  type="checkbox"
+                  checked={enableCard}
+                  onChange={(e) => setEnableCard(e.target.checked)}
+                />
                 Card (one-off)
               </label>
 
               <label className="flex items-center gap-3 text-sm font-medium text-gray-900">
-                <input className={checkboxCls} type="checkbox" checked={enableRecurring} onChange={(e) => setEnableRecurring(e.target.checked)} />
+                <input
+                  className={checkboxCls}
+                  type="checkbox"
+                  checked={enableRecurring}
+                  onChange={(e) => setEnableRecurring(e.target.checked)}
+                />
                 Card (subscription)
               </label>
 
               <label className="flex items-center gap-3 text-sm font-medium text-gray-900">
-                <input className={checkboxCls} type="checkbox" checked={enableBank} onChange={(e) => setEnableBank(e.target.checked)} />
+                <input
+                  className={checkboxCls}
+                  type="checkbox"
+                  checked={enableBank}
+                  onChange={(e) => setEnableBank(e.target.checked)}
+                />
                 Bank transfer
               </label>
 
