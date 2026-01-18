@@ -1,3 +1,4 @@
+// ✅ Replace FULL FILE: app/team/setup/page.tsx
 "use client";
 
 export const dynamic = "force-dynamic";
@@ -144,11 +145,9 @@ export default function SetupPage() {
           name,
           manager_id: authData.user.id,
           expected_players: expected,
-
           due_weekday: interval === "week" ? dueWeekday : null,
           due_day_of_month: interval !== "week" ? dueDayOfMonth : null,
           due_month_in_quarter: interval === "quarter" ? dueMonthInQuarter : null,
-
           stripe_account_id: null,
           stripe_charges_enabled: null,
           stripe_card_payments: null,
@@ -181,7 +180,6 @@ export default function SetupPage() {
 
       if (linkError) throw linkError;
 
-      // Safe: only runs in browser after creation
       setJoinLink(`${window.location.origin}/join/${token}`);
     } catch (err: any) {
       setError(err?.message || "Failed to create team.");
@@ -215,44 +213,25 @@ export default function SetupPage() {
         </div>
 
         <h1 className="text-2xl font-semibold text-gray-900">Set up your team</h1>
-        <p className="mt-2 text-sm text-gray-700">
-          Create a team, set the due schedule, and generate a join link for players.
-        </p>
+        <p className="mt-2 text-sm text-gray-700">Create a team, set the due schedule, and generate a join link for players.</p>
 
         <form onSubmit={handleCreate} className="mt-8 space-y-6">
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div>
               <label className="block text-sm font-semibold text-gray-900">Team name</label>
-              <input
-                className={inputCls}
-                value={teamName}
-                onChange={(e) => setTeamName(e.target.value)}
-                placeholder="e.g. Sunday Lions FC"
-              />
+              <input className={inputCls} value={teamName} onChange={(e) => setTeamName(e.target.value)} placeholder="e.g. Sunday Lions FC" />
             </div>
 
             <div>
               <label className="block text-sm font-semibold text-gray-900">Expected players</label>
-              <input
-                type="number"
-                min={1}
-                className={inputCls}
-                value={expectedPlayers}
-                onChange={(e) => setExpectedPlayers(Number(e.target.value))}
-              />
+              <input type="number" min={1} className={inputCls} value={expectedPlayers} onChange={(e) => setExpectedPlayers(Number(e.target.value))} />
             </div>
           </div>
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div>
               <label className="block text-sm font-semibold text-gray-900">Amount (£)</label>
-              <input
-                type="number"
-                min={1}
-                className={inputCls}
-                value={amount}
-                onChange={(e) => setAmount(Number(e.target.value))}
-              />
+              <input type="number" min={1} className={inputCls} value={amount} onChange={(e) => setAmount(Number(e.target.value))} />
             </div>
 
             <div>
@@ -273,11 +252,7 @@ export default function SetupPage() {
               {interval === "week" && (
                 <div>
                   <label className="block text-sm font-semibold text-gray-900">Due weekday</label>
-                  <select
-                    className={selectCls}
-                    value={dueWeekday}
-                    onChange={(e) => setDueWeekday(Number(e.target.value))}
-                  >
+                  <select className={selectCls} value={dueWeekday} onChange={(e) => setDueWeekday(Number(e.target.value))}>
                     <option value={1}>Monday</option>
                     <option value={2}>Tuesday</option>
                     <option value={3}>Wednesday</option>
@@ -292,14 +267,7 @@ export default function SetupPage() {
               {interval !== "week" && (
                 <div>
                   <label className="block text-sm font-semibold text-gray-900">Due day of month</label>
-                  <input
-                    type="number"
-                    min={1}
-                    max={31}
-                    className={inputCls}
-                    value={dueDayOfMonth}
-                    onChange={(e) => setDueDayOfMonth(Number(e.target.value))}
-                  />
+                  <input type="number" min={1} max={31} className={inputCls} value={dueDayOfMonth} onChange={(e) => setDueDayOfMonth(Number(e.target.value))} />
                   <p className="mt-1 text-xs text-gray-700">Example: 1 = due every 1st.</p>
                 </div>
               )}
@@ -307,11 +275,7 @@ export default function SetupPage() {
               {interval === "quarter" && (
                 <div>
                   <label className="block text-sm font-semibold text-gray-900">Month in quarter</label>
-                  <select
-                    className={selectCls}
-                    value={dueMonthInQuarter}
-                    onChange={(e) => setDueMonthInQuarter(Number(e.target.value) as 1 | 2 | 3)}
-                  >
+                  <select className={selectCls} value={dueMonthInQuarter} onChange={(e) => setDueMonthInQuarter(Number(e.target.value) as 1 | 2 | 3)}>
                     <option value={1}>1st month of quarter</option>
                     <option value={2}>2nd month of quarter</option>
                     <option value={3}>3rd month of quarter</option>
@@ -326,42 +290,22 @@ export default function SetupPage() {
 
             <div className="mt-3 space-y-3">
               <label className="flex items-center gap-3 text-sm font-medium text-gray-900">
-                <input
-                  className={checkboxCls}
-                  type="checkbox"
-                  checked={enableCard}
-                  onChange={(e) => setEnableCard(e.target.checked)}
-                />
+                <input className={checkboxCls} type="checkbox" checked={enableCard} onChange={(e) => setEnableCard(e.target.checked)} />
                 Card (one-off)
               </label>
 
               <label className="flex items-center gap-3 text-sm font-medium text-gray-900">
-                <input
-                  className={checkboxCls}
-                  type="checkbox"
-                  checked={enableRecurring}
-                  onChange={(e) => setEnableRecurring(e.target.checked)}
-                />
+                <input className={checkboxCls} type="checkbox" checked={enableRecurring} onChange={(e) => setEnableRecurring(e.target.checked)} />
                 Card (subscription)
               </label>
 
               <label className="flex items-center gap-3 text-sm font-medium text-gray-900">
-                <input
-                  className={checkboxCls}
-                  type="checkbox"
-                  checked={enableBank}
-                  onChange={(e) => setEnableBank(e.target.checked)}
-                />
+                <input className={checkboxCls} type="checkbox" checked={enableBank} onChange={(e) => setEnableBank(e.target.checked)} />
                 Bank transfer
               </label>
 
               {enableBank && (
-                <textarea
-                  className={`${inputCls} mt-2`}
-                  rows={6}
-                  value={bankInstructions}
-                  onChange={(e) => setBankInstructions(e.target.value)}
-                />
+                <textarea className={`${inputCls} mt-2`} rows={6} value={bankInstructions} onChange={(e) => setBankInstructions(e.target.value)} />
               )}
             </div>
           </div>
@@ -372,10 +316,7 @@ export default function SetupPage() {
             </div>
           )}
 
-          <button
-            disabled={saving}
-            className="w-full rounded-xl bg-gray-900 py-3 font-semibold text-white hover:bg-gray-800 disabled:opacity-60"
-          >
+          <button disabled={saving} className="w-full rounded-xl bg-gray-900 py-3 font-semibold text-white hover:bg-gray-800 disabled:opacity-60">
             {saving ? "Creating…" : "Create team & join link"}
           </button>
         </form>
@@ -386,11 +327,7 @@ export default function SetupPage() {
             <p className="mt-2 break-all text-sm font-medium text-green-900">{joinLink}</p>
 
             <div className="mt-4 flex flex-col sm:flex-row flex-wrap gap-2">
-              <button
-                type="button"
-                onClick={() => navigator.clipboard.writeText(joinLink)}
-                className="rounded-xl bg-green-900 px-4 py-2.5 text-sm font-semibold text-white"
-              >
+              <button type="button" onClick={() => navigator.clipboard.writeText(joinLink)} className="rounded-xl bg-green-900 px-4 py-2.5 text-sm font-semibold text-white">
                 Copy link
               </button>
 
@@ -403,11 +340,7 @@ export default function SetupPage() {
                 Connect Stripe
               </button>
 
-              <button
-                type="button"
-                onClick={() => router.push(returnTo)}
-                className="rounded-xl border border-green-300 bg-white px-4 py-2.5 text-sm font-semibold text-green-900"
-              >
+              <button type="button" onClick={() => router.push(returnTo)} className="rounded-xl border border-green-300 bg-white px-4 py-2.5 text-sm font-semibold text-green-900">
                 Back
               </button>
             </div>
