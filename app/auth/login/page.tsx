@@ -2,8 +2,8 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import supabase from "@/lib/supabase";
 import Link from "next/link";
+import { supabaseBrowser } from "@/lib/supabase-browser";
 
 const inputCls =
   "mt-1 block w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-gray-900 placeholder:text-gray-400 shadow-sm " +
@@ -31,16 +31,18 @@ export default function LoginPage() {
     }
 
     try {
-      const { data, error: signInError } = await supabase.auth.signInWithPassword({
+      const supabase = supabaseBrowser();
+
+      const { error: signInError } = await supabase.auth.signInWithPassword({
         email: trimmedEmail,
         password,
       });
 
       if (signInError) throw signInError;
 
-      if (data.user) {
-        router.push("/dashboard");
-      }
+      // refresh so server components + route handlers see cookies
+      router.replace("/dashboard");
+      router.refresh();
     } catch (err: any) {
       setError(err?.message || "Failed to sign in");
     } finally {
@@ -51,7 +53,9 @@ export default function LoginPage() {
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col justify-center py-12 sm:px-6 lg:px-8">
       <div className="sm:mx-auto sm:w-full sm:max-w-md">
-        <h2 className="text-center text-3xl font-bold text-gray-900">Sign in to your account</h2>
+        <h2 className="text-center text-3xl font-bold text-gray-900">
+          Sign in to your account
+        </h2>
         <p className="mt-2 text-center text-sm text-gray-600">
           Or{" "}
           <Link href="/auth/signup" className="font-medium text-gray-900 hover:text-gray-700">
@@ -116,7 +120,10 @@ export default function LoginPage() {
                 </label>
               </div>
 
-              <Link href="/auth/forgot-password" className="text-sm font-medium text-gray-900 hover:text-gray-700">
+              <Link
+                href="/auth/forgot-password"
+                className="text-sm font-medium text-gray-900 hover:text-gray-700"
+              >
                 Forgot password?
               </Link>
             </div>

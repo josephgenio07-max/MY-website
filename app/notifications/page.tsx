@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import supabase from "@/lib/supabase";
+import { supabaseBrowser } from "@/lib/supabase-browser";
 
 type NotificationItem = {
   id: string;
@@ -42,6 +42,7 @@ function levelStyles(level: NotificationItem["level"]) {
 
 export default function NotificationsPage() {
   const router = useRouter();
+  const supabase = useMemo(() => supabaseBrowser(), []);
 
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -49,9 +50,7 @@ export default function NotificationsPage() {
   const [items, setItems] = useState<NotificationItem[]>([]);
   const [userId, setUserId] = useState<string | null>(null);
 
-  async function loadNotifications() {
-    if (!userId) return;
-    
+  async function loadNotifications(uid: string) {
     setBusy(true);
     setError(null);
 
@@ -59,7 +58,7 @@ export default function NotificationsPage() {
       const { data: rows, error: rowsErr } = await supabase
         .from("notifications")
         .select("id, created_at, title, body, level, is_read")
-        .eq("manager_id", userId)
+        .eq("manager_id", uid)
         .order("created_at", { ascending: false })
         .limit(50);
 
@@ -75,24 +74,21 @@ export default function NotificationsPage() {
         return;
       }
 
-      setItems(
-        rows.map((r: any) => ({
-          id: String(r.id),
-          created_at: String(r.created_at),
-          title: String(r.title ?? "Notification"),
-          body: String(r.body ?? ""),
-          level: (r.level as NotificationItem["level"]) ?? "info",
-          is_read: Boolean(r.is_read),
-        }))
-      );
+      const mapped: NotificationItem[] = rows.map((r: any) => ({
+        id: String(r.id),
+        created_at: String(r.created_at),
+        title: String(r.title ?? "Notification"),
+        body: String(r.body ?? ""),
+        level: (r.level as NotificationItem["level"]) ?? "info",
+        is_read: Boolean(r.is_read),
+      }));
 
-      // Mark all as read
+      setItems(mapped);
+
+      // Mark unread as read (best-effort)
       const unreadIds = rows.filter((r: any) => !r.is_read).map((r: any) => r.id);
       if (unreadIds.length > 0) {
-        await supabase
-          .from("notifications")
-          .update({ is_read: true })
-          .in("id", unreadIds);
+        await supabase.from("notifications").update({ is_read: true }).in("id", unreadIds);
       }
     } finally {
       setBusy(false);
@@ -101,15 +97,19 @@ export default function NotificationsPage() {
 
   async function markAllAsRead() {
     if (!userId) return;
-    
+
     setBusy(true);
-    await supabase
-      .from("notifications")
-      .update({ is_read: true })
-      .eq("manager_id", userId)
-      .eq("is_read", false);
-    
-    await loadNotifications();
+    try {
+      await supabase
+        .from("notifications")
+        .update({ is_read: true })
+        .eq("manager_id", userId)
+        .eq("is_read", false);
+
+      await loadNotifications(userId);
+    } finally {
+      setBusy(false);
+    }
   }
 
   useEffect(() => {
@@ -117,29 +117,48 @@ export default function NotificationsPage() {
 
     async function init() {
       setLoading(true);
+      setError(null);
 
-      const { data } = await supabase.auth.getUser();
+      const { data, error: uErr } = await supabase.auth.getUser();
+
+      if (uErr) {
+        if (!mounted) return;
+        setError(uErr.message);
+        setLoading(false);
+        return;
+      }
+
       if (!data.user) {
         router.replace("/auth/login");
         return;
       }
 
-      if (mounted) {
-        setUserId(data.user.id);
-      }
+      if (!mounted) return;
+
+      setUserId(data.user.id);
     }
 
     init();
     return () => {
       mounted = false;
     };
-  }, [router]);
+  }, [router, supabase]);
 
   useEffect(() => {
-    if (userId) {
-      loadNotifications();
+    let alive = true;
+
+    async function run() {
+      if (!userId) return;
+      await loadNotifications(userId);
+      if (!alive) return;
       setLoading(false);
     }
+
+    run();
+
+    return () => {
+      alive = false;
+    };
   }, [userId]);
 
   if (loading) {
@@ -156,8 +175,8 @@ export default function NotificationsPage() {
   return (
     <main className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
       <header className="sticky top-0 z-50 border-b border-gray-200 bg-white/80 backdrop-blur-sm">
-        <div className="mx-auto max-w-7xl px-6 py-4">
-          <div className="flex items-center justify-between">
+        <div className="mx-auto max-w-7xl px-4 sm:px-6 py-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex items-center gap-3">
               <button
                 onClick={() => router.push("/dashboard")}
@@ -165,13 +184,14 @@ export default function NotificationsPage() {
               >
                 Back
               </button>
-              <div>
-                <h1 className="text-2xl font-bold text-gray-900">Notifications</h1>
+
+              <div className="min-w-0">
+                <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Notifications</h1>
                 <p className="text-sm text-gray-500">Activity and updates</p>
               </div>
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <button
                 onClick={markAllAsRead}
                 disabled={busy || items.length === 0}
@@ -180,8 +200,8 @@ export default function NotificationsPage() {
                 Mark all read
               </button>
               <button
-                onClick={loadNotifications}
-                disabled={busy}
+                onClick={() => userId && loadNotifications(userId)}
+                disabled={busy || !userId}
                 className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-800 disabled:opacity-50"
               >
                 {busy ? "Refreshing…" : "Refresh"}
@@ -191,7 +211,7 @@ export default function NotificationsPage() {
         </div>
       </header>
 
-      <div className="mx-auto max-w-7xl px-6 py-8 space-y-6">
+      <div className="mx-auto max-w-7xl px-4 sm:px-6 py-8 space-y-6">
         {error && (
           <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
             {error}
@@ -199,7 +219,7 @@ export default function NotificationsPage() {
         )}
 
         {items.length === 0 ? (
-          <div className="rounded-2xl bg-white p-16 text-center shadow-sm">
+          <div className="rounded-2xl bg-white p-10 sm:p-16 text-center shadow-sm">
             <h2 className="text-xl font-semibold text-gray-900">Nothing yet</h2>
             <p className="mt-2 text-gray-600">
               Notifications will appear when you send reminders or record payments.
@@ -211,24 +231,22 @@ export default function NotificationsPage() {
               {items.map((n) => (
                 <div
                   key={n.id}
-                  className={`p-6 hover:bg-gray-50 ${!n.is_read ? "bg-blue-50/30" : ""}`}
+                  className={`p-4 sm:p-6 hover:bg-gray-50 ${!n.is_read ? "bg-blue-50/30" : ""}`}
                 >
                   <div className="flex items-start justify-between gap-4">
-                    <div className="flex-1">
+                    <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
-                        <p className="text-sm font-semibold text-gray-900">{n.title}</p>
-                        {!n.is_read && (
-                          <span className="h-2 w-2 rounded-full bg-blue-500"></span>
-                        )}
+                        <p className="text-sm font-semibold text-gray-900 truncate">{n.title}</p>
+                        {!n.is_read && <span className="h-2 w-2 rounded-full bg-blue-500" />}
                       </div>
-                      {n.body && <p className="mt-1 text-sm text-gray-600">{n.body}</p>}
-                      <p className="mt-2 text-xs text-gray-500">
-                        {formatDateTime(n.created_at)}
-                      </p>
+
+                      {n.body && <p className="mt-1 text-sm text-gray-600 break-words">{n.body}</p>}
+
+                      <p className="mt-2 text-xs text-gray-500">{formatDateTime(n.created_at)}</p>
                     </div>
 
                     <span
-                      className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-medium ${levelStyles(
+                      className={`shrink-0 inline-flex items-center rounded-full border px-3 py-1 text-xs font-medium ${levelStyles(
                         n.level
                       )}`}
                     >

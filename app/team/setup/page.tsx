@@ -1,8 +1,8 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
-import supabase from "@/lib/supabase";
+import { useRouter, useSearchParams } from "next/navigation";
+import { supabaseBrowser } from "@/lib/supabase-browser";
 
 function makeToken(length = 40) {
   const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
@@ -14,15 +14,23 @@ function makeToken(length = 40) {
 type Interval = "week" | "month" | "quarter";
 
 const inputCls =
-  "mt-1 w-full rounded-xl border border-gray-300 bg-white px-3 py-2 text-gray-900 placeholder:text-gray-400 " +
-  "focus:outline-none focus:ring-2 focus:ring-gray-900/10 focus:border-gray-400";
+  "mt-1 w-full rounded-xl border border-gray-300 bg-white px-3 py-3 text-gray-900 " +
+  "placeholder:text-gray-500 shadow-sm focus:outline-none focus:ring-2 focus:ring-gray-900/15 focus:border-gray-400";
 
 const selectCls =
-  "mt-1 w-full rounded-xl border border-gray-300 bg-white px-3 py-2 text-gray-900 " +
-  "focus:outline-none focus:ring-2 focus:ring-gray-900/10 focus:border-gray-400";
+  "mt-1 w-full rounded-xl border border-gray-300 bg-white px-3 py-3 text-gray-900 " +
+  "shadow-sm focus:outline-none focus:ring-2 focus:ring-gray-900/15 focus:border-gray-400";
+
+const checkboxCls = "h-4 w-4 rounded border-gray-300 text-gray-900 focus:ring-gray-900";
 
 export default function SetupPage() {
   const router = useRouter();
+  const sp = useSearchParams();
+
+  const supabase = useMemo(() => supabaseBrowser(), []);
+
+  const returnToRaw = (sp.get("returnTo") || "").trim();
+  const returnTo = returnToRaw.startsWith("/") ? returnToRaw : "/dashboard";
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -32,13 +40,13 @@ export default function SetupPage() {
   const [joinLink, setJoinLink] = useState<string | null>(null);
 
   const [teamName, setTeamName] = useState("");
-  const [expectedPlayers, setExpectedPlayers] = useState(26);
+  const [expectedPlayers, setExpectedPlayers] = useState<number>(26);
 
-  const [amount, setAmount] = useState(20);
+  const [amount, setAmount] = useState<number>(20);
   const [interval, setInterval] = useState<Interval>("month");
 
-  const [dueWeekday, setDueWeekday] = useState(1);
-  const [dueDayOfMonth, setDueDayOfMonth] = useState(1);
+  const [dueWeekday, setDueWeekday] = useState<number>(1);
+  const [dueDayOfMonth, setDueDayOfMonth] = useState<number>(1);
   const [dueMonthInQuarter, setDueMonthInQuarter] = useState<1 | 2 | 3>(1);
 
   const [enableCard, setEnableCard] = useState(true);
@@ -58,16 +66,26 @@ export default function SetupPage() {
   }, [enableCard, enableRecurring, enableBank]);
 
   useEffect(() => {
-    const checkUser = async () => {
-      const { data } = await supabase.auth.getUser();
-      if (!data.user) {
+    let alive = true;
+
+    async function checkUser() {
+      const { data, error: authErr } = await supabase.auth.getUser();
+      if (!alive) return;
+
+      if (authErr || !data.user) {
         router.replace("/auth/login");
+        router.refresh();
         return;
       }
+
       setLoading(false);
-    };
+    }
+
     checkUser();
-  }, [router]);
+    return () => {
+      alive = false;
+    };
+  }, [router, supabase]);
 
   function validateDueSettings() {
     if (interval === "week") {
@@ -81,23 +99,32 @@ export default function SetupPage() {
     return null;
   }
 
-  const handleCreate = async (e: React.FormEvent) => {
+  async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
+    if (saving) return;
+
     setError(null);
     setJoinLink(null);
     setTeamId(null);
 
-    const { data } = await supabase.auth.getUser();
-    if (!data.user) {
+    const { data: authData, error: authErr } = await supabase.auth.getUser();
+    if (authErr || !authData.user) {
       router.replace("/auth/login");
+      router.refresh();
       return;
     }
 
     const name = teamName.trim();
     if (!name) return setError("Team name is required.");
-    if (expectedPlayers < 1) return setError("Expected players must be at least 1.");
-    if (amount < 1) return setError("Amount must be at least 1.");
+
+    const expected = Number(expectedPlayers);
+    if (!Number.isFinite(expected) || expected < 1) return setError("Expected players must be at least 1.");
+
+    const amt = Number(amount);
+    if (!Number.isFinite(amt) || amt < 1) return setError("Amount must be at least 1.");
+
     if (methodsEnabled.length === 0) return setError("Enable at least one payment method.");
+
     if (enableBank && bankInstructions.trim().length < 10) {
       return setError("Please provide proper bank transfer instructions.");
     }
@@ -108,14 +135,13 @@ export default function SetupPage() {
     setSaving(true);
 
     try {
-      // ✅ IMPORTANT: force Stripe fields to NULL on new teams
-      // This prevents “it reuses my old Stripe account” if anything weird is happening.
       const { data: team, error: teamError } = await supabase
         .from("teams")
         .insert({
           name,
-          manager_id: data.user.id,
-          expected_players: expectedPlayers,
+          manager_id: authData.user.id,
+          expected_players: expected,
+
           due_weekday: interval === "week" ? dueWeekday : null,
           due_day_of_month: interval !== "week" ? dueDayOfMonth : null,
           due_month_in_quarter: interval === "quarter" ? dueMonthInQuarter : null,
@@ -124,7 +150,7 @@ export default function SetupPage() {
           stripe_charges_enabled: null,
           stripe_card_payments: null,
         })
-        .select()
+        .select("id")
         .single();
 
       if (teamError) throw teamError;
@@ -133,7 +159,7 @@ export default function SetupPage() {
 
       const { error: planError } = await supabase.from("team_plans").insert({
         team_id: team.id,
-        amount: Math.round(amount * 100),
+        amount: Math.round(amt * 100),
         currency: "gbp",
         interval,
         methods_enabled: methodsEnabled,
@@ -158,22 +184,42 @@ export default function SetupPage() {
     } finally {
       setSaving(false);
     }
-  };
+  }
 
-  if (loading) return <div className="p-6">Loading…</div>;
+  if (loading) {
+    return (
+      <div className="min-h-[100dvh] bg-gray-50 flex items-center justify-center px-4">
+        <div className="rounded-2xl bg-white border border-gray-200 p-6 w-full max-w-md text-center">
+          <div className="mx-auto inline-block h-8 w-8 animate-spin rounded-full border-4 border-gray-900 border-r-transparent" />
+          <p className="mt-3 text-sm font-medium text-gray-800">Loading…</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <main className="min-h-screen bg-gray-50 px-4 py-10">
-      <div className="mx-auto w-full max-w-2xl rounded-2xl bg-white p-8 shadow-sm border border-gray-100">
+    <main className="min-h-[100dvh] bg-gray-50 px-4 py-10">
+      <div className="mx-auto w-full max-w-2xl rounded-2xl bg-white p-5 sm:p-8 shadow-sm border border-gray-200">
+        {/* ✅ Always-visible back button */}
+        <div className="mb-4">
+          <button
+            type="button"
+            onClick={() => router.push(returnTo)}
+            className="inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-semibold text-gray-800 hover:bg-gray-50"
+          >
+            ← Back
+          </button>
+        </div>
+
         <h1 className="text-2xl font-semibold text-gray-900">Set up your team</h1>
-        <p className="mt-2 text-sm text-gray-600">
+        <p className="mt-2 text-sm text-gray-700">
           Create a team, set the due schedule, and generate a join link for players.
         </p>
 
         <form onSubmit={handleCreate} className="mt-8 space-y-6">
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div>
-              <label className="block text-sm font-medium text-gray-700">Team name</label>
+              <label className="block text-sm font-semibold text-gray-900">Team name</label>
               <input
                 className={inputCls}
                 value={teamName}
@@ -183,7 +229,7 @@ export default function SetupPage() {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700">Expected players</label>
+              <label className="block text-sm font-semibold text-gray-900">Expected players</label>
               <input
                 type="number"
                 min={1}
@@ -196,7 +242,7 @@ export default function SetupPage() {
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div>
-              <label className="block text-sm font-medium text-gray-700">Amount (£)</label>
+              <label className="block text-sm font-semibold text-gray-900">Amount (£)</label>
               <input
                 type="number"
                 min={1}
@@ -207,7 +253,7 @@ export default function SetupPage() {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700">Frequency</label>
+              <label className="block text-sm font-semibold text-gray-900">Frequency</label>
               <select className={selectCls} value={interval} onChange={(e) => setInterval(e.target.value as Interval)}>
                 <option value="week">Weekly</option>
                 <option value="month">Monthly</option>
@@ -217,13 +263,13 @@ export default function SetupPage() {
           </div>
 
           <div className="rounded-2xl border border-gray-200 p-5">
-            <p className="text-sm font-medium text-gray-900">Due schedule</p>
-            <p className="mt-1 text-xs text-gray-600">Set when payments are due to prevent drift from late payments.</p>
+            <p className="text-sm font-semibold text-gray-900">Due schedule</p>
+            <p className="mt-1 text-xs text-gray-700">Set when payments are due to prevent drift from late payments.</p>
 
             <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
               {interval === "week" && (
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">Due weekday</label>
+                  <label className="block text-sm font-semibold text-gray-900">Due weekday</label>
                   <select className={selectCls} value={dueWeekday} onChange={(e) => setDueWeekday(Number(e.target.value))}>
                     <option value={1}>Monday</option>
                     <option value={2}>Tuesday</option>
@@ -238,7 +284,7 @@ export default function SetupPage() {
 
               {interval !== "week" && (
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">Due day of month</label>
+                  <label className="block text-sm font-semibold text-gray-900">Due day of month</label>
                   <input
                     type="number"
                     min={1}
@@ -247,13 +293,13 @@ export default function SetupPage() {
                     value={dueDayOfMonth}
                     onChange={(e) => setDueDayOfMonth(Number(e.target.value))}
                   />
-                  <p className="mt-1 text-xs text-gray-500">Example: 1 = due every 1st.</p>
+                  <p className="mt-1 text-xs text-gray-700">Example: 1 = due every 1st.</p>
                 </div>
               )}
 
               {interval === "quarter" && (
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">Month in quarter</label>
+                  <label className="block text-sm font-semibold text-gray-900">Month in quarter</label>
                   <select
                     className={selectCls}
                     value={dueMonthInQuarter}
@@ -269,28 +315,28 @@ export default function SetupPage() {
           </div>
 
           <div className="rounded-2xl border border-gray-200 p-5">
-            <p className="text-sm font-medium text-gray-900">Payment methods</p>
+            <p className="text-sm font-semibold text-gray-900">Payment methods</p>
 
-            <div className="mt-3 space-y-2">
-              <label className="flex items-center gap-2 text-sm text-gray-800">
-                <input type="checkbox" checked={enableCard} onChange={(e) => setEnableCard(e.target.checked)} />
+            <div className="mt-3 space-y-3">
+              <label className="flex items-center gap-3 text-sm font-medium text-gray-900">
+                <input className={checkboxCls} type="checkbox" checked={enableCard} onChange={(e) => setEnableCard(e.target.checked)} />
                 Card (one-off)
               </label>
 
-              <label className="flex items-center gap-2 text-sm text-gray-800">
-                <input type="checkbox" checked={enableRecurring} onChange={(e) => setEnableRecurring(e.target.checked)} />
+              <label className="flex items-center gap-3 text-sm font-medium text-gray-900">
+                <input className={checkboxCls} type="checkbox" checked={enableRecurring} onChange={(e) => setEnableRecurring(e.target.checked)} />
                 Card (subscription)
               </label>
 
-              <label className="flex items-center gap-2 text-sm text-gray-800">
-                <input type="checkbox" checked={enableBank} onChange={(e) => setEnableBank(e.target.checked)} />
+              <label className="flex items-center gap-3 text-sm font-medium text-gray-900">
+                <input className={checkboxCls} type="checkbox" checked={enableBank} onChange={(e) => setEnableBank(e.target.checked)} />
                 Bank transfer
               </label>
 
               {enableBank && (
                 <textarea
                   className={`${inputCls} mt-2`}
-                  rows={5}
+                  rows={6}
                   value={bankInstructions}
                   onChange={(e) => setBankInstructions(e.target.value)}
                 />
@@ -299,43 +345,48 @@ export default function SetupPage() {
           </div>
 
           {error && (
-            <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>
+            <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-900">
+              {error}
+            </div>
           )}
 
           <button
             disabled={saving}
-            className="w-full rounded-xl bg-gray-900 py-2.5 font-medium text-white disabled:opacity-60"
+            className="w-full rounded-xl bg-gray-900 py-3 font-semibold text-white hover:bg-gray-800 disabled:opacity-60"
           >
-            {saving ? "Creating…" : "Create team & payment link"}
+            {saving ? "Creating…" : "Create team & join link"}
           </button>
         </form>
 
         {joinLink && (
           <div className="mt-8 rounded-2xl border border-green-200 bg-green-50 p-5">
-            <p className="font-medium text-green-900">Join link ready</p>
-            <p className="mt-2 break-all text-sm text-green-900">{joinLink}</p>
+            <p className="font-semibold text-green-900">Join link ready</p>
+            <p className="mt-2 break-all text-sm font-medium text-green-900">{joinLink}</p>
 
-            <div className="mt-4 flex flex-wrap gap-2">
+            <div className="mt-4 flex flex-col sm:flex-row flex-wrap gap-2">
               <button
+                type="button"
                 onClick={() => navigator.clipboard.writeText(joinLink)}
-                className="rounded-lg bg-green-900 px-3 py-2 text-sm text-white"
+                className="rounded-xl bg-green-900 px-4 py-2.5 text-sm font-semibold text-white"
               >
                 Copy link
               </button>
 
               <button
+                type="button"
                 disabled={!teamId}
                 onClick={() => teamId && router.push(`/team/${teamId}/connect-stripe`)}
-                className="rounded-lg bg-gray-900 px-3 py-2 text-sm text-white disabled:opacity-60"
+                className="rounded-xl bg-gray-900 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-60"
               >
                 Connect Stripe
               </button>
 
               <button
-                onClick={() => router.push("/dashboard")}
-                className="rounded-lg border border-green-300 bg-white px-3 py-2 text-sm text-green-900"
+                type="button"
+                onClick={() => router.push(returnTo)}
+                className="rounded-xl border border-green-300 bg-white px-4 py-2.5 text-sm font-semibold text-green-900"
               >
-                Go to dashboard
+                Back
               </button>
             </div>
           </div>

@@ -3,12 +3,11 @@
 
 import React, { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import supabase from "@/lib/supabase";
+import { supabaseBrowser } from "@/lib/supabase-browser";
 
 import SendBulkReminderButton from "./reminders/SendBulkReminderButton";
 import SendSingleReminderButton from "./reminders/SendSingleReminderButton";
 import MarkPaidButton from "./MarkPaidButton";
-
 
 export const dynamic = "force-dynamic";
 
@@ -158,7 +157,7 @@ function CreatePaymentLinkCard({
       const n = Number(amountGBP);
       if (!Number.isFinite(n) || n <= 0) throw new Error("Enter a valid amount.");
 
-      const json = await apiCall("/api/payment-link/create", {
+      const json = await apiCall("/api/payment-links/create", {
         teamId,
         amount_gbp: Number(n.toFixed(2)),
         billing_type: billingType,
@@ -338,6 +337,8 @@ function DashboardInner() {
   const router = useRouter();
   const sp = useSearchParams();
 
+  const supabase = useMemo(() => supabaseBrowser(), []);
+
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -421,7 +422,6 @@ function DashboardInner() {
     setPlan(null);
     setCollectedThisMonthCents(0);
 
-    // Join link
     try {
       const url = await getOrCreateJoinLink(teamId);
       setJoinLink(url);
@@ -429,7 +429,6 @@ function DashboardInner() {
       setError(e instanceof Error ? e.message : "Failed to load join link");
     }
 
-    // Plan
     const { data: planRow } = await supabase
       .from("team_plans")
       .select("amount, currency, interval")
@@ -441,7 +440,6 @@ function DashboardInner() {
 
     if (planRow) setPlan(planRow as Plan);
 
-    // Memberships
     const { data: memRows, error: memErr } = await supabase
       .from("memberships")
       .select(
@@ -467,7 +465,6 @@ function DashboardInner() {
 
     setMemberships((memRows ?? []) as unknown as MembershipRow[]);
 
-    // Collected this month
     const { data: payRows } = await supabase
       .from("payments")
       .select("amount")
@@ -511,7 +508,6 @@ function DashboardInner() {
     router.replace("/auth/login");
   }
 
-  // Init + teams
   useEffect(() => {
     let cancelled = false;
 
@@ -542,7 +538,6 @@ function DashboardInner() {
       const list = (teamRows ?? []) as Team[];
       setTeams(list);
 
-      // pick team from (1) URL teamId (Stripe return), else (2) localStorage selectedTeamId, else first team
       const urlTeamId = (sp.get("teamId") || "").trim();
       let storedTeamId = "";
       try {
@@ -555,7 +550,6 @@ function DashboardInner() {
         (list[0]?.id ?? null);
 
       setSelectedTeamId(initial || null);
-
       setLoading(false);
     }
 
@@ -563,16 +557,14 @@ function DashboardInner() {
     return () => {
       cancelled = true;
     };
-  }, [router, sp]);
+  }, [router, sp, supabase]);
 
-  // Load team data when team changes
   useEffect(() => {
     if (!selectedTeamId) return;
     loadTeamData(selectedTeamId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedTeamId]);
 
-  // Notifications badge polling
   useEffect(() => {
     let alive = true;
 
@@ -597,13 +589,12 @@ function DashboardInner() {
       alive = false;
       clearInterval(interval);
     };
-  }, []);
+  }, [supabase]);
 
   if (loading) return <DashboardLoading />;
 
   return (
     <main className="min-h-[100dvh] bg-gray-50">
-      {/* Sticky header (mobile friendly) */}
       <header className="sticky top-0 z-50 border-b border-gray-200 bg-white/80 backdrop-blur-sm">
         <div className="mx-auto max-w-7xl px-4 sm:px-6 py-3 sm:py-4">
           <div className="flex items-center justify-between gap-3">
@@ -613,28 +604,7 @@ function DashboardInner() {
             </div>
 
             <div className="flex items-center gap-2">
-              <button
-                onClick={() => router.push("/notifications")}
-                className="relative rounded-lg p-2 text-gray-600 hover:bg-gray-100 hover:text-gray-900 transition-colors"
-                aria-label="Notifications"
-                title="Notifications"
-              >
-                <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"
-                  />
-                </svg>
-
-                {unreadCount > 0 && (
-                  <span className="absolute -top-1 -right-1 flex h-5 w-5 items-center justify-center rounded-full bg-red-500 text-[10px] font-bold text-white">
-                    {unreadCount > 9 ? "9+" : unreadCount}
-                  </span>
-                )}
-              </button>
-
+              
               <button
                 onClick={() => router.push("/settings?returnTo=/dashboard")}
                 className="rounded-lg bg-gray-900 px-3 sm:px-4 py-2 text-sm font-medium text-white hover:bg-gray-800 transition-colors"
@@ -649,16 +619,6 @@ function DashboardInner() {
                 Logout
               </button>
             </div>
-          </div>
-
-          {/* Mobile logout (kept out of the top-right clutter) */}
-          <div className="sm:hidden mt-3">
-            <button
-              onClick={handleLogout}
-              className="w-full rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-100 transition-colors"
-            >
-              Logout
-            </button>
           </div>
         </div>
       </header>
@@ -704,7 +664,6 @@ function DashboardInner() {
           </div>
         ) : (
           <>
-            {/* Team selector + actions */}
             <div className="rounded-2xl bg-white p-5 sm:p-6 shadow-sm">
               <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                 <div className="flex-1 space-y-4">
@@ -765,7 +724,6 @@ function DashboardInner() {
                   )}
                 </div>
 
-                {/* Stripe status card */}
                 <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 lg:min-w-[240px]">
                   <p className="text-sm font-medium text-gray-900 mb-3">Stripe status</p>
 
@@ -800,7 +758,6 @@ function DashboardInner() {
               </div>
             </div>
 
-            {/* Stats */}
             <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 sm:gap-4">
               <div className="rounded-xl bg-white p-4 sm:p-5 shadow-sm">
                 <p className="text-sm font-medium text-gray-600">Players</p>
@@ -828,7 +785,6 @@ function DashboardInner() {
               </div>
             </div>
 
-            {/* Join link */}
             <div className="rounded-2xl bg-white p-5 sm:p-6 shadow-sm">
               <h3 className="text-lg font-semibold text-gray-900 mb-4">Join link</h3>
 
@@ -869,12 +825,8 @@ function DashboardInner() {
               )}
             </div>
 
-            {/* ✅ NEW: Payment link card (standalone, NOT in players table) */}
-            {selectedTeamId && (
-              <CreatePaymentLinkCard teamId={selectedTeamId} defaultAmountGBP={teamDefaultGBP} />
-            )}
+            {selectedTeamId && <CreatePaymentLinkCard teamId={selectedTeamId} defaultAmountGBP={teamDefaultGBP} />}
 
-            {/* Players */}
             <div className="rounded-2xl bg-white shadow-sm overflow-hidden">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between p-5 sm:p-6 border-b border-gray-100">
                 <div>
@@ -907,7 +859,6 @@ function DashboardInner() {
                 </div>
               ) : (
                 <>
-                  {/* ✅ Mobile: cards (no horizontal scroll hell) */}
                   <div className="block sm:hidden p-4 space-y-3">
                     {memberships.map((m) => {
                       const p = m.player;
@@ -951,21 +902,19 @@ function DashboardInner() {
 
                           <div className="mt-3 flex flex-col gap-2">
                             {hasRowIds ? (
-                              <>
-                                <div className="flex flex-wrap gap-2">
-                                  <SendSingleReminderButton
-                                    teamId={m.team_id}
-                                    membershipId={m.id}
-                                    playerName={p?.name ?? null}
-                                  />
-                                  <MarkPaidButton
-                                    teamId={selectedTeamId!}
-                                    playerId={p.id}
-                                    defaultAmountCents={plan?.amount ?? 0}
-                                    currency={(plan?.currency ?? "gbp") as string}
-                                  />
-                                </div>
-                              </>
+                              <div className="flex flex-wrap gap-2">
+                                <SendSingleReminderButton
+                                  teamId={m.team_id}
+                                  membershipId={m.id}
+                                  playerName={p?.name ?? null}
+                                />
+                                <MarkPaidButton
+                                  teamId={selectedTeamId!}
+                                  playerId={p.id}
+                                  defaultAmountCents={plan?.amount ?? 0}
+                                  currency={(plan?.currency ?? "gbp") as string}
+                                />
+                              </div>
                             ) : (
                               <span className="text-xs text-gray-400">Missing IDs</span>
                             )}
@@ -975,7 +924,6 @@ function DashboardInner() {
                     })}
                   </div>
 
-                  {/* ✅ Desktop: table */}
                   <div className="hidden sm:block overflow-x-auto">
                     <table className="w-full">
                       <thead className="bg-gray-50">

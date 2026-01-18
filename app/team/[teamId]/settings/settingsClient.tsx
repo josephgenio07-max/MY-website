@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import supabase from "@/lib/supabase";
+import { supabaseBrowser } from "@/lib/supabase-browser";
 
 type Team = {
   id: string;
@@ -14,15 +14,17 @@ type Team = {
   due_quarter_month: number | null;
 };
 
-type Plan = {
-  amount: number; // cents
-  currency: string;
-  interval: "week" | "month" | "quarter";
-  allow_card_one_off: boolean;
-  allow_card_recurring: boolean;
-  allow_bank_transfer: boolean;
-  bank_instructions: string | null;
-} | null;
+type Plan =
+  | {
+      amount: number; // cents
+      currency: string;
+      interval: "week" | "month" | "quarter";
+      allow_card_one_off: boolean;
+      allow_card_recurring: boolean;
+      allow_bank_transfer: boolean;
+      bank_instructions: string | null;
+    }
+  | null;
 
 const weekdays = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
@@ -35,10 +37,23 @@ function toNumberOrNull(s: string) {
   return Number.isFinite(v) ? v : null;
 }
 
+const inputCls =
+  "w-full rounded-xl border border-gray-300 bg-white px-3 py-3 text-gray-900 placeholder:text-gray-500 shadow-sm " +
+  "focus:outline-none focus:ring-2 focus:ring-gray-900/15 focus:border-gray-400";
+
+const selectCls =
+  "w-full rounded-xl border border-gray-300 bg-white px-3 py-3 text-gray-900 shadow-sm " +
+  "focus:outline-none focus:ring-2 focus:ring-gray-900/15 focus:border-gray-400";
+
+const checkboxCls = "h-4 w-4 rounded border-gray-300 text-gray-900 focus:ring-gray-900";
+
 export default function SettingsClient({ team, plan }: { team: Team; plan: Plan }) {
   const router = useRouter();
+  const supabase = useMemo(() => supabaseBrowser(), []);
+
   const [err, setErr] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [busyTeam, setBusyTeam] = useState(false);
+  const [busyPlan, setBusyPlan] = useState(false);
 
   // Team settings state
   const [name, setName] = useState(team.name);
@@ -59,10 +74,20 @@ export default function SettingsClient({ team, plan }: { team: Team; plan: Plan 
   const [bankInstructions, setBankInstructions] = useState<string>(plan?.bank_instructions ?? "");
 
   const scheduleHint = useMemo(() => {
-    if (dueInterval === "week") return `Every ${weekdays[dueWeekday]}`;
-    if (dueInterval === "month") return `Every month on day ${dueDay}`;
-    return `Every quarter (month ${dueQuarterMonth} of the quarter) on day ${dueDay}`;
+    if (dueInterval === "week") return `Every ${weekdays[Math.max(0, Math.min(6, dueWeekday))]}`;
+    if (dueInterval === "month") return `Every month on day ${Math.max(1, Math.min(28, dueDay))}`;
+    return `Every quarter (month ${Math.max(1, Math.min(3, dueQuarterMonth))} of the quarter) on day ${Math.max(
+      1,
+      Math.min(28, dueDay)
+    )}`;
   }, [dueInterval, dueWeekday, dueDay, dueQuarterMonth]);
+
+  async function logout() {
+    setErr(null);
+    await supabase.auth.signOut();
+    router.replace("/auth/login");
+    router.refresh();
+  }
 
   async function onSaveTeam() {
     setErr(null);
@@ -87,14 +112,14 @@ export default function SettingsClient({ team, plan }: { team: Team; plan: Plan 
       due_quarter_month: dueInterval === "quarter" ? Math.max(1, Math.min(3, dueQuarterMonth)) : null,
     };
 
-    setBusy(true);
+    setBusyTeam(true);
     try {
       const { error } = await supabase.from("teams").update(payload).eq("id", team.id);
       if (error) return setErr(error.message);
 
       router.refresh();
     } finally {
-      setBusy(false);
+      setBusyTeam(false);
     }
   }
 
@@ -107,7 +132,14 @@ export default function SettingsClient({ team, plan }: { team: Team; plan: Plan 
     }
     const amountCents = Math.round(amount * 100);
 
-    setBusy(true);
+    if (!allowOneOff && !allowRecurring && !allowBank) {
+      return setErr("Enable at least one payment method.");
+    }
+    if (allowBank && bankInstructions.trim().length < 10) {
+      return setErr("Bank instructions look too short.");
+    }
+
+    setBusyPlan(true);
     try {
       // deactivate existing active plan (keep history)
       const { error: deactErr } = await supabase
@@ -134,76 +166,81 @@ export default function SettingsClient({ team, plan }: { team: Team; plan: Plan 
 
       router.refresh();
     } finally {
-      setBusy(false);
+      setBusyPlan(false);
     }
   }
 
   return (
-    <main className="min-h-screen bg-gray-50 px-4 py-10">
+    <main className="min-h-[100dvh] bg-gray-50 px-4 py-10">
       <div className="mx-auto w-full max-w-3xl space-y-4">
-        <div className="rounded-2xl bg-white p-6 shadow-sm border border-gray-100 flex items-center justify-between">
-          <div>
+        <header className="rounded-2xl bg-white p-5 sm:p-6 shadow-sm border border-gray-200 flex items-start justify-between gap-3">
+          <div className="min-w-0">
             <h1 className="text-xl font-semibold text-gray-900">Team Settings</h1>
-            <p className="text-sm text-gray-600">{team.name}</p>
+            <p className="text-sm text-gray-700 truncate">{team.name}</p>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
             <button
-              onClick={async () => {
-                await supabase.auth.signOut();
-                router.replace("/auth/login");
-              }}
-              className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-900 hover:bg-gray-50"
+              onClick={logout}
+              className="rounded-xl border border-gray-300 bg-white px-4 py-2.5 text-sm font-semibold text-gray-900 hover:bg-gray-50"
             >
               Log out
             </button>
 
             <button
               onClick={() => router.push("/dashboard")}
-              className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-900 hover:bg-gray-50"
+              className="rounded-xl border border-gray-300 bg-white px-4 py-2.5 text-sm font-semibold text-gray-900 hover:bg-gray-50"
             >
               Back
             </button>
           </div>
-        </div>
+        </header>
 
-        {err && <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">{err}</div>}
+        {err && (
+          <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm font-medium text-red-900">
+            {err}
+          </div>
+        )}
 
         {/* Team */}
-        <section className="rounded-2xl bg-white p-6 shadow-sm border border-gray-100 space-y-4">
-          <h2 className="text-lg font-semibold text-gray-900">Team</h2>
-
+        <section className="rounded-2xl bg-white p-5 sm:p-6 shadow-sm border border-gray-200 space-y-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Team name</label>
+            <h2 className="text-lg font-semibold text-gray-900">Team</h2>
+            <p className="text-sm text-gray-700">Update the basics for this team.</p>
+          </div>
+
+          <div className="space-y-2">
+            <label className="block text-sm font-semibold text-gray-900">Team name</label>
             <input
               value={name}
               onChange={(e) => setName(e.target.value)}
-              disabled={busy}
-              className="w-full rounded-lg border border-gray-300 px-3 py-2"
+              disabled={busyTeam || busyPlan}
+              className={inputCls}
+              placeholder="Team name"
             />
           </div>
 
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Expected players</label>
+          <div className="space-y-2">
+            <label className="block text-sm font-semibold text-gray-900">Expected players</label>
             <input
               value={expectedPlayers}
               onChange={(e) => setExpectedPlayers(e.target.value)}
-              disabled={busy}
+              disabled={busyTeam || busyPlan}
               inputMode="numeric"
-              className="w-full rounded-lg border border-gray-300 px-3 py-2"
+              className={inputCls}
               placeholder="e.g. 15"
             />
           </div>
 
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Due schedule</label>
+          <div className="space-y-2">
+            <label className="block text-sm font-semibold text-gray-900">Due schedule</label>
 
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
               <select
                 value={dueInterval}
                 onChange={(e) => setDueInterval(e.target.value as any)}
-                disabled={busy}
-                className="rounded-lg border border-gray-300 px-3 py-2"
+                disabled={busyTeam || busyPlan}
+                className={selectCls}
               >
                 <option value="week">Weekly</option>
                 <option value="month">Monthly</option>
@@ -214,8 +251,8 @@ export default function SettingsClient({ team, plan }: { team: Team; plan: Plan 
                 <select
                   value={dueWeekday}
                   onChange={(e) => setDueWeekday(Number(e.target.value))}
-                  disabled={busy}
-                  className="rounded-lg border border-gray-300 px-3 py-2"
+                  disabled={busyTeam || busyPlan}
+                  className={selectCls}
                 >
                   {weekdays.map((w, i) => (
                     <option key={w} value={i}>
@@ -229,8 +266,8 @@ export default function SettingsClient({ team, plan }: { team: Team; plan: Plan 
                 <select
                   value={dueDay}
                   onChange={(e) => setDueDay(Number(e.target.value))}
-                  disabled={busy}
-                  className="rounded-lg border border-gray-300 px-3 py-2"
+                  disabled={busyTeam || busyPlan}
+                  className={selectCls}
                 >
                   {Array.from({ length: 28 }, (_, i) => i + 1).map((d) => (
                     <option key={d} value={d}>
@@ -244,8 +281,8 @@ export default function SettingsClient({ team, plan }: { team: Team; plan: Plan 
                 <select
                   value={dueQuarterMonth}
                   onChange={(e) => setDueQuarterMonth(Number(e.target.value))}
-                  disabled={busy}
-                  className="rounded-lg border border-gray-300 px-3 py-2"
+                  disabled={busyTeam || busyPlan}
+                  className={selectCls}
                 >
                   <option value={1}>Month 1</option>
                   <option value={2}>Month 2</option>
@@ -254,41 +291,45 @@ export default function SettingsClient({ team, plan }: { team: Team; plan: Plan 
               )}
             </div>
 
-            <div className="mt-2 text-xs text-gray-600">Current: {scheduleHint}</div>
+            <div className="text-xs font-medium text-gray-700">Current: {scheduleHint}</div>
           </div>
 
           <button
             onClick={onSaveTeam}
-            disabled={busy}
-            className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-800 disabled:opacity-50"
+            disabled={busyTeam || busyPlan}
+            className="w-full sm:w-auto rounded-xl bg-gray-900 px-5 py-3 text-sm font-semibold text-white hover:bg-gray-800 disabled:opacity-50"
           >
-            {busy ? "Saving..." : "Save team settings"}
+            {busyTeam ? "Saving..." : "Save team settings"}
           </button>
         </section>
 
         {/* Plan */}
-        <section className="rounded-2xl bg-white p-6 shadow-sm border border-gray-100 space-y-4">
-          <h2 className="text-lg font-semibold text-gray-900">Plan</h2>
+        <section className="rounded-2xl bg-white p-5 sm:p-6 shadow-sm border border-gray-200 space-y-4">
+          <div>
+            <h2 className="text-lg font-semibold text-gray-900">Plan</h2>
+            <p className="text-sm text-gray-700">Change amount, frequency, and allowed payment types.</p>
+          </div>
 
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Amount (£)</label>
+            <div className="space-y-2">
+              <label className="block text-sm font-semibold text-gray-900">Amount (£)</label>
               <input
                 value={amountGBP}
                 onChange={(e) => setAmountGBP(e.target.value)}
-                disabled={busy}
+                disabled={busyTeam || busyPlan}
                 inputMode="decimal"
-                className="w-full rounded-lg border border-gray-300 px-3 py-2"
+                className={inputCls}
+                placeholder="20.00"
               />
             </div>
 
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Frequency</label>
+            <div className="space-y-2">
+              <label className="block text-sm font-semibold text-gray-900">Frequency</label>
               <select
                 value={planInterval}
                 onChange={(e) => setPlanInterval(e.target.value as any)}
-                disabled={busy}
-                className="w-full rounded-lg border border-gray-300 px-3 py-2"
+                disabled={busyTeam || busyPlan}
+                className={selectCls}
               >
                 <option value="week">Weekly</option>
                 <option value="month">Monthly</option>
@@ -298,58 +339,61 @@ export default function SettingsClient({ team, plan }: { team: Team; plan: Plan 
           </div>
 
           <div className="space-y-2">
-            <label className="block text-sm font-medium text-gray-700">Payment methods</label>
+            <label className="block text-sm font-semibold text-gray-900">Payment methods</label>
 
-            <label className="flex items-center gap-2 text-sm">
+            <label className="flex items-center gap-3 text-sm font-medium text-gray-900">
               <input
+                className={checkboxCls}
                 type="checkbox"
                 checked={allowOneOff}
-                disabled={busy}
+                disabled={busyTeam || busyPlan}
                 onChange={(e) => setAllowOneOff(e.target.checked)}
               />
               Card (one-off)
             </label>
 
-            <label className="flex items-center gap-2 text-sm">
+            <label className="flex items-center gap-3 text-sm font-medium text-gray-900">
               <input
+                className={checkboxCls}
                 type="checkbox"
                 checked={allowRecurring}
-                disabled={busy}
+                disabled={busyTeam || busyPlan}
                 onChange={(e) => setAllowRecurring(e.target.checked)}
               />
               Card (recurring)
             </label>
 
-            <label className="flex items-center gap-2 text-sm">
+            <label className="flex items-center gap-3 text-sm font-medium text-gray-900">
               <input
+                className={checkboxCls}
                 type="checkbox"
                 checked={allowBank}
-                disabled={busy}
+                disabled={busyTeam || busyPlan}
                 onChange={(e) => setAllowBank(e.target.checked)}
               />
               Bank transfer
             </label>
           </div>
 
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Bank instructions</label>
+          <div className="space-y-2">
+            <label className="block text-sm font-semibold text-gray-900">Bank instructions</label>
             <textarea
               value={bankInstructions}
               onChange={(e) => setBankInstructions(e.target.value)}
-              disabled={busy || !allowBank}
-              rows={4}
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 disabled:opacity-60"
-              placeholder="e.g. Sort code, account number, reference format…"
+              disabled={busyTeam || busyPlan || !allowBank}
+              rows={5}
+              className={`${inputCls} ${!allowBank ? "opacity-60" : ""}`}
+              placeholder="Sort code, account number, reference format…"
             />
-            {!allowBank && <div className="mt-1 text-xs text-gray-500">Enable bank transfer to edit.</div>}
+            {!allowBank && <div className="text-xs font-medium text-gray-700">Enable bank transfer to edit.</div>}
           </div>
 
           <button
             onClick={onSavePlan}
-            disabled={busy}
-            className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-800 disabled:opacity-50"
+            disabled={busyTeam || busyPlan}
+            className="w-full sm:w-auto rounded-xl bg-gray-900 px-5 py-3 text-sm font-semibold text-white hover:bg-gray-800 disabled:opacity-50"
           >
-            {busy ? "Saving..." : "Save plan settings"}
+            {busyPlan ? "Saving..." : "Save plan settings"}
           </button>
         </section>
       </div>

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import supabase from "@/lib/supabase";
+import { supabaseBrowser } from "@/lib/supabase-browser";
 
 export default function SendSingleReminderButton(props: {
   teamId: string;
@@ -9,15 +9,15 @@ export default function SendSingleReminderButton(props: {
   playerName?: string | null;
   disabled?: boolean;
 }) {
+  const supabase = useMemo(() => supabaseBrowser(), []);
+
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<string | null>(null);
   const [msg, setMsg] = useState("");
 
   useEffect(() => {
-    setMsg(
-      `Hi${props.playerName ? ` ${props.playerName}` : ""}, quick reminder your payment is due. Thanks!`
-    );
+    setMsg(`Hi${props.playerName ? ` ${props.playerName}` : ""}, quick reminder your payment is due. Thanks!`);
   }, [props.playerName]);
 
   const hardDisabled = useMemo(() => {
@@ -32,7 +32,11 @@ export default function SendSingleReminderButton(props: {
     setResult(null);
 
     try {
-      const { data } = await supabase.auth.getSession();
+      // If you’re logged in, cookies are the source of truth.
+      // But your /api/send-reminder expects a Bearer token, so we fetch it from session.
+      const { data, error: sessErr } = await supabase.auth.getSession();
+      if (sessErr) throw new Error(sessErr.message);
+
       const token = data.session?.access_token;
       if (!token) throw new Error("Not logged in. Please refresh the page.");
 
@@ -54,7 +58,9 @@ export default function SendSingleReminderButton(props: {
       let json: any = {};
       try {
         json = JSON.parse(text);
-      } catch {}
+      } catch {
+        // ignore non-json
+      }
 
       if (!res.ok) throw new Error(json?.error || text || "Failed to send reminder.");
 
@@ -68,7 +74,7 @@ export default function SendSingleReminderButton(props: {
 
       setOpen(false);
     } catch (e: any) {
-      setResult((e?.message ?? "Failed").toString());
+      setResult(String(e?.message ?? "Failed"));
     } finally {
       setBusy(false);
     }
@@ -87,7 +93,7 @@ export default function SendSingleReminderButton(props: {
         {busy ? "Sending…" : "Remind"}
       </button>
 
-      {result && <div className="text-[11px] text-red-600 mt-1">{result}</div>}
+      {result && <div className="mt-1 text-[11px] text-red-600">{result}</div>}
 
       {open && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
@@ -110,9 +116,7 @@ export default function SendSingleReminderButton(props: {
             </div>
 
             <div className="mt-4">
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Your message
-              </label>
+              <label className="mb-2 block text-sm font-medium text-gray-700">Your message</label>
               <textarea
                 className="w-full rounded-lg border border-gray-300 p-3 text-sm outline-none focus:ring-2 focus:ring-gray-900"
                 rows={4}

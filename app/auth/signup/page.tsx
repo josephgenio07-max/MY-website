@@ -2,8 +2,8 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import supabase from "@/lib/supabase";
 import Link from "next/link";
+import { supabaseBrowser } from "@/lib/supabase-browser";
 
 const inputCls =
   "mt-1 block w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-gray-900 placeholder:text-gray-400 shadow-sm " +
@@ -46,29 +46,26 @@ export default function SignUpPage() {
     }
 
     try {
+      const supabase = supabaseBrowser();
+
       const { data, error: signUpError } = await supabase.auth.signUp({
         email: trimmedEmail,
         password,
         options: {
-          // ✅ CRITICAL: verification link lands back inside your app
           emailRedirectTo: `${window.location.origin}/auth/callback`,
-          data: {
-            display_name: trimmedName || null,
-          },
+          data: { display_name: trimmedName || null },
         },
       });
 
       if (signUpError) throw signUpError;
 
-      // Supabase behaviour:
-      // - If email confirmations ON → user exists but session may be null (needs verify)
-      // - If OFF → session exists immediately
       const confirmedAt = (data.user as any)?.confirmed_at;
 
       if (confirmedAt || data.session) {
-        router.push("/team/setup");
+        router.replace("/team/setup");
+        router.refresh();
       } else {
-        router.push("/auth/verify-email");
+        router.replace("/auth/verify-email");
       }
     } catch (err: any) {
       setError(err?.message || "Failed to create account");

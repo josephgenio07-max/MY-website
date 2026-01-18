@@ -1,11 +1,10 @@
 "use client";
 
-export const dynamic = "force-dynamic";
-
-
 import React, { useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import supabase from "@/lib/supabase";
+import { supabaseBrowser } from "@/lib/supabase-browser";
+
+/* ---------------- Preferences ---------------- */
 
 type Prefs = {
   emailAlerts: boolean;
@@ -38,7 +37,9 @@ function safeLoadPrefs(): Prefs {
 function safeSavePrefs(p: Prefs) {
   try {
     window.localStorage.setItem(LS_KEY, JSON.stringify(p));
-  } catch {}
+  } catch {
+    // ignore
+  }
 }
 
 function ToggleRow({
@@ -109,6 +110,8 @@ function ActionCard({
   );
 }
 
+/* ---------------- Page ---------------- */
+
 export default function SettingsPage() {
   const router = useRouter();
   const sp = useSearchParams();
@@ -126,9 +129,8 @@ export default function SettingsPage() {
 
   const [status, setStatus] = useState<string | null>(null);
 
-  const canResetPassword = useMemo(() => {
-    return Boolean(email && email.includes("@"));
-  }, [email]);
+  const emailReady = Boolean(email);
+  const canResetPassword = useMemo(() => Boolean(email && email.includes("@")), [email]);
 
   useEffect(() => {
     setPrefs(safeLoadPrefs());
@@ -136,34 +138,51 @@ export default function SettingsPage() {
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
+
     async function init() {
-      const { data } = await supabase.auth.getUser();
-      if (!data.user) {
+      try {
+        const supabase = supabaseBrowser();
+        const { data, error } = await supabase.auth.getUser();
+
+        if (error || !data.user) {
+          router.replace("/auth/login");
+          router.refresh();
+          return;
+        }
+
+        if (cancelled) return;
+
+        setEmail(data.user.email ?? "");
+        setCreatedAt(
+          data.user.created_at
+            ? new Date(data.user.created_at).toLocaleDateString("en-GB", {
+                day: "numeric",
+                month: "short",
+                year: "numeric",
+              })
+            : ""
+        );
+
+        setLoading(false);
+      } catch {
         router.replace("/auth/login");
-        return;
+        router.refresh();
       }
-
-      setEmail(data.user.email ?? "");
-      setCreatedAt(
-        data.user.created_at
-          ? new Date(data.user.created_at).toLocaleDateString("en-GB", {
-              day: "numeric",
-              month: "short",
-              year: "numeric",
-            })
-          : ""
-      );
-
-      setLoading(false);
     }
+
     init();
+    return () => {
+      cancelled = true;
+    };
   }, [router]);
 
   async function handleLogout() {
     setBusy(true);
     try {
-      await supabase.auth.signOut();
+      await supabaseBrowser().auth.signOut();
       router.replace("/auth/login");
+      router.refresh();
     } finally {
       setBusy(false);
     }
@@ -176,7 +195,8 @@ export default function SettingsPage() {
     }
 
     setStatus("Sending reset email…");
-    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+
+    const { error } = await supabaseBrowser().auth.resetPasswordForEmail(email, {
       redirectTo: `${window.location.origin}/auth/reset-password`,
     });
 
@@ -224,6 +244,7 @@ export default function SettingsPage() {
       </header>
 
       <div className="mx-auto max-w-3xl px-4 sm:px-6 py-6 sm:py-8 space-y-6 pb-10">
+        {/* Quick actions */}
         <section className="space-y-3">
           <ActionCard
             icon="🏠"
@@ -254,6 +275,7 @@ export default function SettingsPage() {
           />
         </section>
 
+        {/* Account */}
         <section className="rounded-3xl bg-white p-5 sm:p-6 shadow-sm border border-gray-100">
           <h2 className="text-lg font-semibold text-gray-900">Account</h2>
           <p className="mt-1 text-sm text-gray-600">Your login details.</p>
@@ -261,7 +283,12 @@ export default function SettingsPage() {
           <div className="mt-4 space-y-3">
             <div className="rounded-2xl bg-gray-50 p-4">
               <p className="text-xs uppercase tracking-wide text-gray-500">Email</p>
-              <p className="mt-1 text-sm font-semibold text-gray-900 break-all">{email || "Unknown"}</p>
+              <p className="mt-1 text-sm font-semibold text-gray-900 break-all">
+                {email || "Unknown"}
+              </p>
+              {!emailReady && (
+                <p className="mt-1 text-xs text-gray-500">Loading account email…</p>
+              )}
             </div>
 
             <div className="rounded-2xl bg-gray-50 p-4">
@@ -273,14 +300,16 @@ export default function SettingsPage() {
           <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
             <button
               onClick={handleResetPassword}
-              disabled={!canResetPassword}
+              disabled={!emailReady || !canResetPassword}
               className="rounded-2xl border border-gray-200 bg-white px-4 py-3 text-sm font-semibold hover:bg-gray-50 disabled:opacity-50"
             >
               Reset password
             </button>
 
             <button
-              onClick={() => (window.location.href = "mailto:support@yourapp.com?subject=Delete%20my%20account")}
+              onClick={() =>
+                (window.location.href = "mailto:support@yourapp.com?subject=Delete%20my%20account")
+              }
               className="rounded-2xl border border-gray-200 bg-white px-4 py-3 text-sm font-semibold hover:bg-gray-50"
             >
               Delete account
@@ -288,6 +317,7 @@ export default function SettingsPage() {
           </div>
         </section>
 
+        {/* Preferences */}
         <section className="rounded-3xl bg-white p-5 sm:p-6 shadow-sm border border-gray-100">
           <div className="flex items-start justify-between gap-3">
             <div>
@@ -338,13 +368,14 @@ export default function SettingsPage() {
           </div>
         </section>
 
+        {/* Logout */}
         <section className="rounded-3xl bg-white p-5 sm:p-6 shadow-sm border border-gray-100">
           <button
             onClick={handleLogout}
             disabled={busy}
             className="w-full rounded-2xl bg-red-600 px-4 py-3.5 text-sm font-semibold text-white hover:bg-red-700 disabled:opacity-50"
           >
-            Logout
+            {busy ? "Logging out…" : "Logout"}
           </button>
         </section>
       </div>

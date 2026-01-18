@@ -1,12 +1,12 @@
 "use client";
 
 import { useState } from "react";
-import supabase from "@/lib/supabase";
 import Link from "next/link";
+import { supabaseBrowser } from "@/lib/supabase-browser";
 
 const inputCls =
-  "mt-1 block w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-gray-900 placeholder:text-gray-400 shadow-sm " +
-  "focus:ring-2 focus:ring-gray-900 focus:border-transparent outline-none";
+  "mt-1 block w-full rounded-xl border border-gray-300 bg-white px-3 py-3 text-gray-900 " +
+  "placeholder:text-gray-500 shadow-sm focus:ring-2 focus:ring-gray-900 focus:border-transparent outline-none";
 
 export default function ForgotPasswordPage() {
   const [email, setEmail] = useState("");
@@ -30,7 +30,7 @@ export default function ForgotPasswordPage() {
     }
 
     try {
-      const { error: resetError } = await supabase.auth.resetPasswordForEmail(
+      const { error: resetError } = await supabaseBrowser().auth.resetPasswordForEmail(
         trimmedEmail,
         {
           redirectTo: `${window.location.origin}/auth/reset-password`,
@@ -49,32 +49,28 @@ export default function ForgotPasswordPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col justify-center py-12 sm:px-6 lg:px-8">
-      <div className="sm:mx-auto sm:w-full sm:max-w-md">
-        <h2 className="text-center text-3xl font-bold text-gray-900">
-          Reset your password
-        </h2>
-        <p className="mt-2 text-center text-sm text-gray-600">
+    <div className="min-h-[100dvh] bg-gray-50 flex flex-col justify-center px-4 py-10 sm:px-6 lg:px-8">
+      <div className="mx-auto w-full max-w-md">
+        <h2 className="text-center text-3xl font-bold text-gray-900">Reset your password</h2>
+        <p className="mt-2 text-center text-sm text-gray-700">
           Remember your password?{" "}
-          <Link href="/auth/login" className="font-medium text-gray-900 hover:text-gray-700">
+          <Link href="/auth/login" className="font-semibold text-gray-900 hover:text-gray-700">
             Sign in
           </Link>
         </p>
-      </div>
 
-      <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md">
-        <div className="bg-white py-8 px-4 shadow-sm border border-gray-100 rounded-2xl sm:px-10">
+        <div className="mt-8 bg-white py-8 px-4 shadow-sm border border-gray-200 rounded-2xl sm:px-10">
           {success ? (
-            <div className="rounded-lg bg-green-50 border border-green-200 p-4">
-              <h3 className="text-sm font-medium text-green-800">Check your email</h3>
-              <p className="mt-2 text-sm text-green-700">
+            <div className="rounded-xl bg-green-50 border border-green-200 p-4">
+              <h3 className="text-sm font-semibold text-green-900">Check your email</h3>
+              <p className="mt-2 text-sm text-green-800">
                 We&apos;ve sent a password reset link to{" "}
-                <strong>{submittedEmail}</strong>.
+                <strong className="break-all">{submittedEmail}</strong>.
               </p>
               <div className="mt-4">
                 <Link
                   href="/auth/login"
-                  className="text-sm font-medium text-green-800 hover:text-green-900"
+                  className="text-sm font-semibold text-green-900 hover:text-green-950"
                 >
                   Back to sign in →
                 </Link>
@@ -83,18 +79,18 @@ export default function ForgotPasswordPage() {
           ) : (
             <>
               {error && (
-                <div className="mb-4 rounded-lg bg-red-50 border border-red-200 p-4">
-                  <p className="text-sm text-red-800">{error}</p>
+                <div className="mb-4 rounded-xl bg-red-50 border border-red-200 p-4">
+                  <p className="text-sm text-red-900">{error}</p>
                 </div>
               )}
 
-              <p className="mb-6 text-sm text-gray-600">
+              <p className="mb-6 text-sm text-gray-700">
                 Enter your email address and we&apos;ll send you a link to reset your password.
               </p>
 
-              <form onSubmit={handleResetPassword} className="space-y-6">
+              <form onSubmit={handleResetPassword} className="space-y-5">
                 <div>
-                  <label htmlFor="email" className="block text-sm font-medium text-gray-700">
+                  <label htmlFor="email" className="block text-sm font-semibold text-gray-900">
                     Email address
                   </label>
                   <input
@@ -113,7 +109,7 @@ export default function ForgotPasswordPage() {
                 <button
                   type="submit"
                   disabled={loading}
-                  className="w-full flex justify-center py-2.5 px-4 rounded-lg text-sm font-medium text-white bg-gray-900 hover:bg-gray-800 disabled:opacity-50"
+                  className="w-full rounded-xl bg-gray-900 px-4 py-3 text-sm font-semibold text-white hover:bg-gray-800 disabled:opacity-50"
                 >
                   {loading ? "Sending..." : "Send reset link"}
                 </button>
