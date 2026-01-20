@@ -1,4 +1,3 @@
-// ✅ Replace FULL FILE: app/dashboard/page.tsx
 "use client";
 
 import React, { Suspense, useEffect, useMemo, useState } from "react";
@@ -8,6 +7,7 @@ import { supabaseBrowser } from "@/lib/supabase-browser";
 import SendBulkReminderButton from "./reminders/SendBulkReminderButton";
 import SendSingleReminderButton from "./reminders/SendSingleReminderButton";
 import MarkPaidButton from "./MarkPaidButton";
+import CreatePaymentLinkCard from "./components/CreatePaymentLinkCard";
 
 export const dynamic = "force-dynamic";
 
@@ -75,6 +75,111 @@ function StatusBadge({ status }: { status: MembershipRow["status"] }) {
   );
 }
 
+/* ---------------- Remove Player UI (ellipsis + confirm modal) ---------------- */
+
+function EllipsisMenu(props: {
+  disabled?: boolean;
+  items: { label: string; danger?: boolean; onClick: () => void }[];
+}) {
+  const { disabled, items } = props;
+  const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    function onDoc(e: MouseEvent) {
+      if (!open) return;
+      const target = e.target as HTMLElement | null;
+      if (!target) return;
+      // close on outside click
+      if (!target.closest?.("[data-ellipsis-root='1']")) setOpen(false);
+    }
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
+
+  return (
+    <div className="relative" data-ellipsis-root="1">
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => setOpen((v) => !v)}
+        className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 disabled:opacity-50 transition-colors"
+        aria-label="More actions"
+        title="More"
+      >
+        <span className="text-lg leading-none">…</span>
+      </button>
+
+      {open && (
+        <div className="absolute right-0 mt-2 w-48 overflow-hidden rounded-xl border border-gray-200 bg-white shadow-lg z-50">
+          {items.map((it, idx) => (
+            <button
+              key={idx}
+              type="button"
+              onClick={() => {
+                setOpen(false);
+                it.onClick();
+              }}
+              className={`w-full px-4 py-2.5 text-left text-sm hover:bg-gray-50 transition-colors ${
+                it.danger ? "text-rose-700" : "text-gray-800"
+              }`}
+            >
+              {it.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ConfirmRemoveModal(props: {
+  open: boolean;
+  busy?: boolean;
+  title?: string;
+  body?: string;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const { open, busy, title, body, onCancel, onConfirm } = props;
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 p-4">
+      <div className="w-full max-w-md rounded-2xl bg-white shadow-xl border border-gray-200">
+        <div className="p-5">
+          <h4 className="text-lg font-semibold text-gray-900">{title ?? "Remove player?"}</h4>
+          <p className="mt-2 text-sm text-gray-600">
+            {body ??
+              "This removes them from the team and stops automatic reminders. You can re-add them later if needed."}
+          </p>
+
+          <div className="mt-5 flex items-center justify-end gap-2">
+            <button
+              type="button"
+              onClick={onCancel}
+              disabled={busy}
+              className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 transition-colors"
+            >
+              Cancel
+            </button>
+
+            <button
+              type="button"
+              onClick={onConfirm}
+              disabled={busy}
+              className="rounded-lg bg-rose-600 px-4 py-2 text-sm font-medium text-white hover:bg-rose-700 disabled:opacity-50 transition-colors"
+            >
+              {busy ? "Removing..." : "Remove"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* --------------------------------------------------------------------------- */
+
 export default function DashboardPage() {
   return (
     <Suspense fallback={<DashboardLoading />}>
@@ -90,245 +195,6 @@ function DashboardLoading() {
         <div className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-gray-900 border-r-transparent" />
         <p className="mt-3 text-sm text-gray-600">Loading dashboard...</p>
       </div>
-    </div>
-  );
-}
-
-/**
- * CreatePaymentLinkCard
- * - Standalone (NOT inside Players table)
- * - Generates a shareable payment link for the selected team
- *
- * IMPORTANT:
- * This calls POST /api/payment-link/create
- * You MUST have that API route returning: { url: string }
- * If your existing API is different, change the endpoint + payload here.
- */
-function CreatePaymentLinkCard({
-  teamId,
-  defaultAmountGBP,
-}: {
-  teamId: string;
-  defaultAmountGBP: number;
-}) {
-  const [open, setOpen] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-
-  const [amountGBP, setAmountGBP] = useState<string>(String(defaultAmountGBP || 5));
-  const [billingType, setBillingType] = useState<"one_off" | "subscription">("one_off");
-  const [interval, setInterval] = useState<"week" | "month" | "quarter">("month");
-  const [dueDate, setDueDate] = useState<string>(""); // YYYY-MM-DD optional
-
-  const [createdUrl, setCreatedUrl] = useState<string | null>(null);
-
-  async function copy(text: string) {
-    try {
-      await navigator.clipboard.writeText(text);
-    } catch {
-      alert("Failed to copy");
-    }
-  }
-
-  async function apiCall(endpoint: string, body: any) {
-    const res = await fetch(endpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-      cache: "no-store",
-    });
-
-    const text = await res.text();
-    let json: any = {};
-    try {
-      json = JSON.parse(text);
-    } catch {}
-
-    if (!res.ok) throw new Error(json?.error || text || "API request failed");
-    return json;
-  }
-
-  async function createLink() {
-    setBusy(true);
-    setErr(null);
-    setCreatedUrl(null);
-
-    try {
-      const n = Number(amountGBP);
-      if (!Number.isFinite(n) || n <= 0) throw new Error("Enter a valid amount.");
-
-      const json = await apiCall("/api/payment-links/create", {
-        teamId,
-        amount_gbp: Number(n.toFixed(2)),
-        billing_type: billingType,
-        interval: billingType === "subscription" ? interval : null,
-        due_date: dueDate.trim() ? dueDate.trim() : null,
-      });
-
-      if (!json?.url) throw new Error("API did not return a link.");
-      setCreatedUrl(String(json.url));
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : "Failed to create link");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div className="rounded-2xl bg-white p-6 shadow-sm">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div className="min-w-0">
-          <h3 className="text-lg font-semibold text-gray-900">Create payment link</h3>
-          <p className="mt-1 text-sm text-gray-600">
-            Generate a shareable link for one-off payments or subscriptions. Not tied to any player row.
-          </p>
-        </div>
-
-        <button
-          onClick={() => {
-            setOpen(true);
-            setErr(null);
-            setCreatedUrl(null);
-          }}
-          className="w-full sm:w-auto rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-800 transition-colors"
-        >
-          Create link
-        </button>
-      </div>
-
-      {open && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <div className="w-full max-w-lg rounded-2xl bg-white shadow-xl border border-gray-100">
-            <div className="p-5 sm:p-6 border-b border-gray-100">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <h4 className="text-lg font-semibold text-gray-900">New payment link</h4>
-                  <p className="mt-1 text-sm text-gray-600">
-                    Keep it simple. Amount + type. Optional due date.
-                  </p>
-                </div>
-                <button
-                  onClick={() => setOpen(false)}
-                  className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium hover:bg-gray-50"
-                >
-                  Close
-                </button>
-              </div>
-            </div>
-
-            <div className="p-5 sm:p-6 space-y-4">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Amount (£)</label>
-                  <input
-                    type="number"
-                    min={0.5}
-                    step={0.5}
-                    value={amountGBP}
-                    onChange={(e) => setAmountGBP(e.target.value)}
-                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-gray-900"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Type</label>
-                  <select
-                    value={billingType}
-                    onChange={(e) => setBillingType(e.target.value as any)}
-                    className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-gray-900"
-                  >
-                    <option value="one_off">One-off</option>
-                    <option value="subscription">Subscription</option>
-                  </select>
-                </div>
-              </div>
-
-              {billingType === "subscription" && (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Interval</label>
-                    <select
-                      value={interval}
-                      onChange={(e) => setInterval(e.target.value as any)}
-                      className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-gray-900"
-                    >
-                      <option value="week">Weekly</option>
-                      <option value="month">Monthly</option>
-                      <option value="quarter">Quarterly</option>
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Due date (optional)</label>
-                    <input
-                      type="date"
-                      value={dueDate}
-                      onChange={(e) => setDueDate(e.target.value)}
-                      className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-gray-900"
-                    />
-                  </div>
-                </div>
-              )}
-
-              {billingType === "one_off" && (
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Due date (optional)</label>
-                  <input
-                    type="date"
-                    value={dueDate}
-                    onChange={(e) => setDueDate(e.target.value)}
-                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-gray-900"
-                  />
-                </div>
-              )}
-
-              {err && (
-                <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{err}</div>
-              )}
-
-              {createdUrl && (
-                <div className="rounded-xl border border-gray-200 bg-gray-50 p-3">
-                  <p className="text-xs font-medium text-gray-600 uppercase">Payment link</p>
-                  <code className="mt-1 block text-sm text-gray-800 break-all">{createdUrl}</code>
-                  <div className="mt-3 flex flex-col sm:flex-row gap-2">
-                    <button
-                      onClick={() => copy(createdUrl)}
-                      className="w-full sm:w-auto rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-800"
-                    >
-                      Copy
-                    </button>
-                    <a
-                      href={createdUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="w-full sm:w-auto rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 text-center"
-                    >
-                      Open
-                    </a>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            <div className="p-5 sm:p-6 border-t border-gray-100 flex flex-col sm:flex-row gap-2 sm:justify-end">
-              <button
-                onClick={() => setOpen(false)}
-                disabled={busy}
-                className="w-full sm:w-auto rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={createLink}
-                disabled={busy}
-                className="w-full sm:w-auto rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-800 disabled:opacity-50"
-              >
-                {busy ? "Creating..." : "Create payment link"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
@@ -352,6 +218,11 @@ function DashboardInner() {
   const [collectedThisMonthCents, setCollectedThisMonthCents] = useState<number>(0);
 
   const [unreadCount, setUnreadCount] = useState<number>(0);
+
+  // ✅ confirm modal state (added)
+  const [removeOpen, setRemoveOpen] = useState(false);
+  const [removeTarget, setRemoveTarget] = useState<{ membershipId: string; playerName: string } | null>(null);
+  const [removeBusy, setRemoveBusy] = useState(false);
 
   const selectedTeam = useMemo(
     () => teams.find((t) => t.id === selectedTeamId) ?? null,
@@ -508,6 +379,35 @@ function DashboardInner() {
     router.replace("/auth/login");
   }
 
+  // ✅ REMOVE player (cancel membership) — added
+  async function removeMembership(membershipId: string) {
+    if (!selectedTeamId) return;
+
+    setRemoveBusy(true);
+    setError(null);
+    try {
+      const { error: upErr } = await supabase
+        .from("memberships")
+        .update({ status: "canceled" })
+        .eq("id", membershipId)
+        .eq("team_id", selectedTeamId);
+
+      if (upErr) throw upErr;
+
+      // remove from UI immediately
+      setMemberships((prev) => prev.filter((m) => m.id !== membershipId));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to remove player");
+    } finally {
+      setRemoveBusy(false);
+    }
+  }
+
+  function openRemove(membershipId: string, playerName: string) {
+    setRemoveTarget({ membershipId, playerName });
+    setRemoveOpen(true);
+  }
+
   useEffect(() => {
     let cancelled = false;
 
@@ -604,7 +504,6 @@ function DashboardInner() {
             </div>
 
             <div className="flex items-center gap-2">
-              
               <button
                 onClick={() => router.push("/settings?returnTo=/dashboard")}
                 className="rounded-lg bg-gray-900 px-3 sm:px-4 py-2 text-sm font-medium text-white hover:bg-gray-800 transition-colors"
@@ -825,7 +724,7 @@ function DashboardInner() {
               )}
             </div>
 
-            {selectedTeamId && <CreatePaymentLinkCard teamId={selectedTeamId} defaultAmountGBP={teamDefaultGBP} />}
+            {selectedTeamId && <CreatePaymentLinkCard teamId={selectedTeamId} />}
 
             <div className="rounded-2xl bg-white shadow-sm overflow-hidden">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between p-5 sm:p-6 border-b border-gray-100">
@@ -879,6 +778,20 @@ function DashboardInner() {
                               </div>
                               <p className="mt-1 text-sm text-gray-600 break-all">{p?.email ?? "—"}</p>
                             </div>
+
+                            {/* ✅ ellipsis menu on mobile card */}
+                            {hasRowIds ? (
+                              <EllipsisMenu
+                                disabled={busy || removeBusy}
+                                items={[
+                                  {
+                                    label: "Remove player",
+                                    danger: true,
+                                    onClick: () => openRemove(m.id, p?.name ?? "Player"),
+                                  },
+                                ]}
+                              />
+                            ) : null}
                           </div>
 
                           <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
@@ -985,6 +898,18 @@ function DashboardInner() {
                                         defaultAmountCents={plan?.amount ?? 0}
                                         currency={(plan?.currency ?? "gbp") as string}
                                       />
+
+                                      {/* ✅ ellipsis menu so nothing looks bigger than the rest */}
+                                      <EllipsisMenu
+                                        disabled={busy || removeBusy}
+                                        items={[
+                                          {
+                                            label: "Remove player",
+                                            danger: true,
+                                            onClick: () => openRemove(m.id, p?.name ?? "Player"),
+                                          },
+                                        ]}
+                                      />
                                     </>
                                   ) : (
                                     <span className="text-xs text-gray-400">Missing IDs</span>
@@ -1003,6 +928,25 @@ function DashboardInner() {
           </>
         )}
       </div>
+
+      {/* ✅ confirm modal mounted once, controlled by state */}
+      <ConfirmRemoveModal
+        open={removeOpen}
+        busy={removeBusy}
+        title={removeTarget ? `Remove ${removeTarget.playerName}?` : "Remove player?"}
+        body="This removes them from the team and stops automatic reminders. You can re-add them later if needed."
+        onCancel={() => {
+          if (removeBusy) return;
+          setRemoveOpen(false);
+          setRemoveTarget(null);
+        }}
+        onConfirm={async () => {
+          if (!removeTarget) return;
+          await removeMembership(removeTarget.membershipId);
+          setRemoveOpen(false);
+          setRemoveTarget(null);
+        }}
+      />
     </main>
   );
 }

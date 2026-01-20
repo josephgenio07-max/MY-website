@@ -3,12 +3,10 @@
 import { useMemo, useState } from "react";
 
 type LinkInfo = {
-  allowOneOff: boolean;
-  allowSubscription: boolean;
-  allowCustomAmount: boolean;
-  defaultAmountGBP: number | null;
-  minAmountGBP: number;
-  maxAmountGBP: number;
+  amountGBP: number | null;
+  dueDate: string | null; // YYYY-MM-DD
+  billingType: "one_off" | "subscription";
+  interval: "week" | "month" | "quarter" | null;
 };
 
 type TeamInfo = {
@@ -17,58 +15,62 @@ type TeamInfo = {
   stripeReady: boolean;
 };
 
-type PlanInfo = { amountCents: number; currency: string; interval: string } | null;
-
-type NotFoundProps = {
-  notFound: true;
-};
+type NotFoundProps = { notFound: true };
 
 type FoundProps = {
   notFound?: false;
   token: string;
   team: TeamInfo;
   link: LinkInfo;
-  plan: PlanInfo;
 };
 
 type Props = NotFoundProps | FoundProps;
 
+function formatDue(d: string | null) {
+  if (!d) return null;
+  try {
+    return new Date(`${d}T00:00:00.000Z`).toLocaleDateString("en-GB", {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+    });
+  } catch {
+    return d;
+  }
+}
+
 export default function PayTeamClient(props: Props) {
-  // ✅ TS-safe: if notFound, return early
   if ("notFound" in props && props.notFound) {
     return (
       <main className="min-h-[100dvh] bg-gray-50 px-4 py-10">
         <div className="mx-auto max-w-md rounded-2xl bg-white p-6 shadow-sm border border-gray-100">
           <h1 className="text-xl font-semibold text-gray-900">Link not found</h1>
-          <p className="mt-2 text-sm text-gray-600">
-            This payment link is invalid or disabled.
-          </p>
+          <p className="mt-2 text-sm text-gray-600">This payment link is invalid or disabled.</p>
         </div>
       </main>
     );
   }
 
-  const { token, team, link, plan } = props;
+  const { token, team, link } = props;
 
-  const [mode, setMode] = useState<"one_off" | "subscription">("one_off");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  // Simple inputs (you can later make name/email/phone fields here if needed)
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
 
-  const defaultOneOff = useMemo(() => {
-    if (link.defaultAmountGBP != null) return link.defaultAmountGBP;
-    if (plan?.amountCents) return plan.amountCents / 100;
-    return 10;
-  }, [link.defaultAmountGBP, plan]);
+  // Required explicit consent
+  const [consent, setConsent] = useState(false);
 
-  const [amountGBP, setAmountGBP] = useState<number>(defaultOneOff);
-
-  const canSub = link.allowSubscription && !!plan;
   const stripeOk = team.stripeReady;
+
+  const amountText = useMemo(() => {
+    if (link.amountGBP == null) return "—";
+    return `£${link.amountGBP.toFixed(2)}`;
+  }, [link.amountGBP]);
+
+  const dueText = useMemo(() => formatDue(link.dueDate), [link.dueDate]);
 
   async function startCheckout() {
     setErr(null);
@@ -77,47 +79,27 @@ export default function PayTeamClient(props: Props) {
     const trimmedEmail = email.trim().toLowerCase();
     const trimmedPhone = phone.trim();
 
-    if (!trimmedName || !trimmedEmail) {
-      return setErr("Please enter your name and email.");
-    }
-    if (!trimmedPhone) {
-      return setErr("Please enter your phone number.");
+    if (!link.amountGBP || !Number.isFinite(link.amountGBP) || link.amountGBP <= 0) {
+      return setErr("This link is missing a fixed amount. Ask the manager to create a new one.");
     }
 
+    if (!trimmedName) return setErr("Name is required.");
+    if (!trimmedEmail) return setErr("Email is required.");
+    if (!trimmedPhone) return setErr("Phone number is required.");
+    if (!consent) return setErr("You must consent to reminders to continue.");
     if (!stripeOk) return setErr("This team is not ready to accept card payments yet.");
-
-    if (mode === "subscription" && !canSub) {
-      return setErr("Subscription isn’t available for this team.");
-    }
-
-    if (mode === "one_off") {
-      if (!link.allowOneOff) return setErr("One-off payments are disabled.");
-      if (!Number.isFinite(amountGBP) || amountGBP < link.minAmountGBP || amountGBP > link.maxAmountGBP) {
-        return setErr(`Enter an amount between £${link.minAmountGBP} and £${link.maxAmountGBP}.`);
-      }
-    }
 
     setBusy(true);
     try {
-      const payload =
-        mode === "one_off"
-          ? {
-              source: "team_payment_link",
-              token,
-              mode: "one_off",
-              amountCents: Math.round(amountGBP * 100),
-              name: trimmedName,
-              email: trimmedEmail,
-              phone: trimmedPhone,
-            }
-          : {
-              source: "team_payment_link",
-              token,
-              mode: "subscription",
-              name: trimmedName,
-              email: trimmedEmail,
-              phone: trimmedPhone,
-            };
+      // NOTE: no mode, no amountCents. Server must enforce from payment_links.
+      const payload = {
+        source: "team_payment_link",
+        token,
+        name: trimmedName,
+        email: trimmedEmail,
+        phone: trimmedPhone,
+        reminder_consent: consent,
+      };
 
       const res = await fetch("/api/stripe/checkout", {
         method: "POST",
@@ -147,7 +129,7 @@ export default function PayTeamClient(props: Props) {
       <div className="mx-auto max-w-md space-y-4">
         <div className="rounded-2xl bg-white p-6 shadow-sm border border-gray-100">
           <h1 className="text-2xl font-bold text-gray-900">{team.name}</h1>
-          <p className="mt-1 text-sm text-gray-600">Pay securely via card.</p>
+          <p className="mt-1 text-sm text-gray-600">Card payment (amount set by the manager).</p>
 
           {!stripeOk && (
             <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
@@ -155,10 +137,17 @@ export default function PayTeamClient(props: Props) {
             </div>
           )}
 
-          {/* Details */}
+          <div className="mt-4 rounded-xl border border-gray-200 bg-gray-50 p-4">
+            <p className="text-sm font-semibold text-gray-900">Amount: {amountText}</p>
+            {dueText && <p className="mt-1 text-xs text-gray-600">Due: {dueText}</p>}
+            <p className="mt-2 text-xs text-gray-600">
+              This amount is fixed by the manager and can’t be changed here.
+            </p>
+          </div>
+
           <div className="mt-5 space-y-3">
             <div>
-              <label className="block text-sm font-medium text-gray-700">Name</label>
+              <label className="block text-sm font-medium text-gray-700">Name *</label>
               <input
                 className="mt-1 w-full rounded-xl border border-gray-300 bg-white px-4 py-3 text-base outline-none focus:ring-2 focus:ring-gray-900"
                 value={name}
@@ -168,7 +157,7 @@ export default function PayTeamClient(props: Props) {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700">Email</label>
+              <label className="block text-sm font-medium text-gray-700">Email *</label>
               <input
                 className="mt-1 w-full rounded-xl border border-gray-300 bg-white px-4 py-3 text-base outline-none focus:ring-2 focus:ring-gray-900"
                 value={email}
@@ -178,7 +167,7 @@ export default function PayTeamClient(props: Props) {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700">Phone</label>
+              <label className="block text-sm font-medium text-gray-700">Phone *</label>
               <input
                 className="mt-1 w-full rounded-xl border border-gray-300 bg-white px-4 py-3 text-base outline-none focus:ring-2 focus:ring-gray-900"
                 value={phone}
@@ -187,63 +176,19 @@ export default function PayTeamClient(props: Props) {
               />
               <p className="mt-1 text-xs text-gray-500">UK number required for reminders.</p>
             </div>
-          </div>
 
-          {/* Mode */}
-          <div className="mt-5 grid grid-cols-2 gap-2">
-            <button
-              onClick={() => setMode("one_off")}
-              className={`rounded-xl px-4 py-2 text-sm font-semibold border ${
-                mode === "one_off"
-                  ? "bg-gray-900 text-white border-gray-900"
-                  : "bg-white text-gray-900 border-gray-200 hover:bg-gray-50"
-              }`}
-            >
-              One-off
-            </button>
-
-            <button
-              onClick={() => setMode("subscription")}
-              disabled={!canSub}
-              className={`rounded-xl px-4 py-2 text-sm font-semibold border ${
-                mode === "subscription"
-                  ? "bg-gray-900 text-white border-gray-900"
-                  : "bg-white text-gray-900 border-gray-200 hover:bg-gray-50"
-              } ${!canSub ? "opacity-50 cursor-not-allowed" : ""}`}
-              title={!plan ? "Team has no subscription plan set" : ""}
-            >
-              Subscription
-            </button>
-          </div>
-
-          {/* Amount / Plan */}
-          {mode === "one_off" ? (
-            <div className="mt-5 space-y-2">
-              <label className="block text-sm font-medium text-gray-700">Amount</label>
+            <label className="mt-2 flex items-start gap-3 rounded-xl border border-gray-200 bg-white p-4">
               <input
-                type="number"
-                min={link.minAmountGBP}
-                max={link.maxAmountGBP}
-                step={0.5}
-                value={amountGBP}
-                onChange={(e) => setAmountGBP(Number(e.target.value))}
-                disabled={!link.allowCustomAmount}
-                className="w-full rounded-xl border border-gray-300 bg-white px-4 py-3 text-base outline-none focus:ring-2 focus:ring-gray-900"
+                type="checkbox"
+                className="mt-1 h-4 w-4"
+                checked={consent}
+                onChange={(e) => setConsent(e.target.checked)}
               />
-              <p className="text-xs text-gray-500">
-                Min £{link.minAmountGBP} · Max £{link.maxAmountGBP}
-              </p>
-            </div>
-          ) : (
-            <div className="mt-5 rounded-xl border border-gray-200 bg-gray-50 p-4">
-              <p className="text-sm font-semibold text-gray-900">
-                £{((plan?.amountCents || 0) / 100).toFixed(2)} / {plan?.interval}
-              </p>
-              <p className="mt-1 text-xs text-gray-600">
-                Recurring payment (fixed by the team).
-              </p>
-            </div>
-          )}
+              <span className="text-sm text-gray-700">
+                I agree to receive payment reminders by SMS/WhatsApp/email for this team.
+              </span>
+            </label>
+          </div>
 
           {err && (
             <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">

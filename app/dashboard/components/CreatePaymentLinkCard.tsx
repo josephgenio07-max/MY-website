@@ -5,13 +5,8 @@ import { useRouter } from "next/navigation";
 
 const PAYMENT_LINK_ROUTE = "/dashboard/new-payment-link";
 
-export default function CreatePaymentLinkCard({
-  teamId,
-}: {
-  teamId: string | null;
-}) {
+export default function CreatePaymentLinkCard({ teamId }: { teamId: string | null }) {
   const router = useRouter();
-
   const disabled = useMemo(() => !teamId, [teamId]);
 
   function go() {

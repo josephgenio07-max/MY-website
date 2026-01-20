@@ -1,6 +1,7 @@
 import Stripe from "stripe";
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
+import { createSupabaseServerClient } from "@/lib/supabaseServer";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -9,12 +10,26 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
 
 export async function POST(req: Request) {
   try {
-    const body = await req.json().catch(() => null);
-    const teamId = String(body?.teamId ?? "");
-    const managerId = String(body?.managerId ?? "");
+    const body = await req.json().catch(() => ({} as any));
+    const teamId = String(body?.teamId ?? "").trim();
 
-    if (!teamId) return NextResponse.json({ error: "teamId is required" }, { status: 400 });
-    if (!managerId) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+    if (!teamId) {
+      return NextResponse.json({ error: "teamId is required" }, { status: 400 });
+    }
+
+    // ✅ Auth: derive manager from session cookies (NOT from request body)
+    const supabase = await createSupabaseServerClient();
+    const {
+      data: { user },
+      error: userErr,
+    } = await supabase.auth.getUser();
+
+    if (userErr || !user) {
+      return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+    }
+
+    const managerId = user.id;
+    const managerEmail = user.email ?? undefined;
 
     // ✅ Load team + verify ownership
     const { data: team, error: teamErr } = await supabaseAdmin
@@ -37,6 +52,8 @@ export async function POST(req: Request) {
     if (!accountId) {
       const account = await stripe.accounts.create({
         type: "express",
+        country: "GB",
+        email: managerEmail,
         capabilities: {
           card_payments: { requested: true },
           transfers: { requested: true },
@@ -56,13 +73,17 @@ export async function POST(req: Request) {
         .eq("id", teamId);
 
       if (updateErr) {
-        return NextResponse.json({ error: "Failed to update team", details: updateErr.message }, { status: 500 });
+        return NextResponse.json({ error: "Failed to update team" }, { status: 500 });
       }
     }
 
-    const origin = req.headers.get("origin") ?? "http://localhost:3000";
-    const returnUrl = `${origin}/dashboard?teamId=${teamId}&connect=return`;
-    const refreshUrl = `${origin}/dashboard?teamId=${teamId}&connect=refresh`;
+    const base =
+      (process.env.NEXT_PUBLIC_BASE_URL || "").trim().replace(/\/$/, "") ||
+      req.headers.get("origin") ||
+      "http://localhost:3000";
+
+    const returnUrl = `${base}/dashboard?teamId=${teamId}&connect=return`;
+    const refreshUrl = `${base}/dashboard?teamId=${teamId}&connect=refresh`;
 
     const accountLink = await stripe.accountLinks.create({
       account: accountId,
@@ -73,6 +94,9 @@ export async function POST(req: Request) {
 
     return NextResponse.json({ url: accountLink.url, accountId });
   } catch (err: any) {
-    return NextResponse.json({ error: "Unexpected error", details: err?.message ?? String(err) }, { status: 500 });
+    return NextResponse.json(
+      { error: "Unexpected error", details: err?.message ?? String(err) },
+      { status: 500 }
+    );
   }
 }

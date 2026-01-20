@@ -1,264 +1,318 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useEffect, useMemo, useState, useTransition } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { supabaseBrowser } from "@/lib/supabase-browser";
 
-type NotificationItem = {
+import { renameTeam, archiveTeam, restoreTeam, deleteTeam } from "./actions";
+
+type TeamRow = {
   id: string;
+  name: string;
   created_at: string;
-  title: string;
-  body: string;
-  level: "info" | "success" | "warning" | "error";
-  is_read: boolean;
+  archived_at: string | null;
 };
 
-function formatDateTime(iso: string) {
-  try {
-    return new Date(iso).toLocaleString("en-GB", {
-      day: "2-digit",
-      month: "short",
-      year: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  } catch {
-    return iso;
-  }
+function fmtDate(iso: string | null) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
 }
 
-function levelStyles(level: NotificationItem["level"]) {
-  switch (level) {
-    case "success":
-      return "bg-emerald-50 text-emerald-700 border-emerald-200";
-    case "warning":
-      return "bg-amber-50 text-amber-700 border-amber-200";
-    case "error":
-      return "bg-rose-50 text-rose-700 border-rose-200";
-    default:
-      return "bg-blue-50 text-blue-700 border-blue-200";
-  }
-}
-
-export default function NotificationsPage() {
+export default function TeamsClient() {
   const router = useRouter();
+  const sp = useSearchParams();
   const supabase = useMemo(() => supabaseBrowser(), []);
 
+  const returnTo = (sp.get("returnTo") || "/dashboard").trim();
+
   const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [items, setItems] = useState<NotificationItem[]>([]);
-  const [userId, setUserId] = useState<string | null>(null);
 
-  async function loadNotifications(uid: string) {
-    setBusy(true);
+  const [teams, setTeams] = useState<TeamRow[]>([]);
+  const [showArchived, setShowArchived] = useState(false);
+
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+
+  const [pending, startTransition] = useTransition();
+
+  async function load() {
     setError(null);
+    setLoading(true);
 
-    try {
-      const { data: rows, error: rowsErr } = await supabase
-        .from("notifications")
-        .select("id, created_at, title, body, level, is_read")
-        .eq("manager_id", uid)
-        .order("created_at", { ascending: false })
-        .limit(50);
-
-      if (rowsErr) {
-        setItems([]);
-        setError("Failed to load notifications.");
-        return;
-      }
-
-      if (!rows || rows.length === 0) {
-        setItems([]);
-        setError("No notifications yet.");
-        return;
-      }
-
-      const mapped: NotificationItem[] = rows.map((r: any) => ({
-        id: String(r.id),
-        created_at: String(r.created_at),
-        title: String(r.title ?? "Notification"),
-        body: String(r.body ?? ""),
-        level: (r.level as NotificationItem["level"]) ?? "info",
-        is_read: Boolean(r.is_read),
-      }));
-
-      setItems(mapped);
-
-      // Mark unread as read (best-effort)
-      const unreadIds = rows.filter((r: any) => !r.is_read).map((r: any) => r.id);
-      if (unreadIds.length > 0) {
-        await supabase.from("notifications").update({ is_read: true }).in("id", unreadIds);
-      }
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function markAllAsRead() {
-    if (!userId) return;
-
-    setBusy(true);
-    try {
-      await supabase
-        .from("notifications")
-        .update({ is_read: true })
-        .eq("manager_id", userId)
-        .eq("is_read", false);
-
-      await loadNotifications(userId);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  useEffect(() => {
-    let mounted = true;
-
-    async function init() {
-      setLoading(true);
-      setError(null);
-
-      const { data, error: uErr } = await supabase.auth.getUser();
-
-      if (uErr) {
-        if (!mounted) return;
-        setError(uErr.message);
-        setLoading(false);
-        return;
-      }
-
-      if (!data.user) {
-        router.replace("/auth/login");
-        return;
-      }
-
-      if (!mounted) return;
-
-      setUserId(data.user.id);
+    const { data: u } = await supabase.auth.getUser();
+    if (!u.user) {
+      router.replace("/auth/login");
+      return;
     }
 
-    init();
-    return () => {
-      mounted = false;
-    };
-  }, [router, supabase]);
+    const q = supabase
+      .from("teams")
+      .select("id, name, created_at, archived_at")
+      .eq("manager_id", u.user.id)
+      .order("created_at", { ascending: false });
 
-  useEffect(() => {
-    let alive = true;
+    const { data, error } = showArchived ? await q : await q.is("archived_at", null);
 
-    async function run() {
-      if (!userId) return;
-      await loadNotifications(userId);
-      if (!alive) return;
+    if (error) {
+      setError(error.message);
+      setTeams([]);
       setLoading(false);
+      return;
     }
 
-    run();
+    setTeams((data ?? []) as TeamRow[]);
+    setLoading(false);
+  }
 
-    return () => {
-      alive = false;
-    };
-  }, [userId]);
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showArchived]);
+
+  function openRename(t: TeamRow) {
+    setRenamingId(t.id);
+    setRenameValue(t.name);
+  }
+
+  function closeRename() {
+    setRenamingId(null);
+    setRenameValue("");
+  }
+
+  function doRename(teamId: string) {
+    const next = renameValue.trim();
+    if (!next) {
+      setError("Team name cannot be empty.");
+      return;
+    }
+
+    setError(null);
+    startTransition(async () => {
+      try {
+        await renameTeam(teamId, next);
+        closeRename();
+        await load();
+      } catch (e: any) {
+        setError(e?.message || "Rename failed.");
+      }
+    });
+  }
+
+  function doArchive(teamId: string) {
+    setError(null);
+    startTransition(async () => {
+      try {
+        await archiveTeam(teamId);
+        await load();
+      } catch (e: any) {
+        setError(e?.message || "Archive failed.");
+      }
+    });
+  }
+
+  function doRestore(teamId: string) {
+    setError(null);
+    startTransition(async () => {
+      try {
+        await restoreTeam(teamId);
+        await load();
+      } catch (e: any) {
+        setError(e?.message || "Restore failed.");
+      }
+    });
+  }
+
+  function doDelete(teamId: string) {
+    // last-ditch safety: make them confirm
+    const ok = window.confirm(
+      "Delete this team permanently?\n\nThis is blocked if there are players or any payment history."
+    );
+    if (!ok) return;
+
+    setError(null);
+    startTransition(async () => {
+      try {
+        await deleteTeam(teamId);
+        await load();
+      } catch (e: any) {
+        setError(e?.message || "Delete failed.");
+      }
+    });
+  }
 
   if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-gray-50">
+      <div className="flex min-h-[100dvh] items-center justify-center bg-gray-50">
         <div className="text-center">
           <div className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-gray-900 border-r-transparent" />
-          <p className="mt-3 text-sm text-gray-600">Loading notifications…</p>
+          <p className="mt-3 text-sm text-gray-600">Loading teams…</p>
         </div>
       </div>
     );
   }
 
   return (
-    <main className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
-      <header className="sticky top-0 z-50 border-b border-gray-200 bg-white/80 backdrop-blur-sm">
-        <div className="mx-auto max-w-7xl px-4 sm:px-6 py-4">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div className="flex items-center gap-3">
+    <main className="min-h-[100dvh] bg-gray-50">
+      <header className="sticky top-0 z-50 border-b border-gray-200 bg-white/90 backdrop-blur">
+        <div className="mx-auto max-w-4xl px-4 sm:px-6 py-4">
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Manage teams</h1>
+              <p className="text-sm text-gray-600">Rename, archive, restore or delete teams.</p>
+            </div>
+
+            <div className="flex items-center gap-2">
               <button
-                onClick={() => router.push("/dashboard")}
-                className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                onClick={() => router.push(returnTo)}
+                className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm font-medium hover:bg-gray-50"
               >
                 Back
               </button>
 
-              <div className="min-w-0">
-                <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Notifications</h1>
-                <p className="text-sm text-gray-500">Activity and updates</p>
-              </div>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2">
               <button
-                onClick={markAllAsRead}
-                disabled={busy || items.length === 0}
-                className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                onClick={() => setShowArchived((v) => !v)}
+                className="rounded-xl bg-gray-900 px-3 py-2 text-sm font-semibold text-white hover:bg-gray-800"
               >
-                Mark all read
-              </button>
-              <button
-                onClick={() => userId && loadNotifications(userId)}
-                disabled={busy || !userId}
-                className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-800 disabled:opacity-50"
-              >
-                {busy ? "Refreshing…" : "Refresh"}
+                {showArchived ? "Hide archived" : "Show archived"}
               </button>
             </div>
           </div>
         </div>
       </header>
 
-      <div className="mx-auto max-w-7xl px-4 sm:px-6 py-8 space-y-6">
+      <div className="mx-auto max-w-4xl px-4 sm:px-6 py-6 space-y-4">
         {error && (
-          <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+          <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
             {error}
           </div>
         )}
 
-        {items.length === 0 ? (
-          <div className="rounded-2xl bg-white p-10 sm:p-16 text-center shadow-sm">
-            <h2 className="text-xl font-semibold text-gray-900">Nothing yet</h2>
-            <p className="mt-2 text-gray-600">
-              Notifications will appear when you send reminders or record payments.
+        {teams.length === 0 ? (
+          <div className="rounded-2xl bg-white p-10 text-center shadow-sm border border-gray-100">
+            <p className="text-gray-700 font-semibold">No teams found</p>
+            <p className="mt-1 text-sm text-gray-500">
+              {showArchived ? "No archived teams." : "Create a team from the dashboard."}
             </p>
           </div>
         ) : (
-          <div className="rounded-2xl bg-white shadow-sm overflow-hidden">
+          <div className="rounded-2xl bg-white shadow-sm border border-gray-100 overflow-hidden">
             <div className="divide-y divide-gray-100">
-              {items.map((n) => (
-                <div
-                  key={n.id}
-                  className={`p-4 sm:p-6 hover:bg-gray-50 ${!n.is_read ? "bg-blue-50/30" : ""}`}
-                >
-                  <div className="flex items-start justify-between gap-4">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <p className="text-sm font-semibold text-gray-900 truncate">{n.title}</p>
-                        {!n.is_read && <span className="h-2 w-2 rounded-full bg-blue-500" />}
+              {teams.map((t) => {
+                const isArchived = Boolean(t.archived_at);
+
+                return (
+                  <div key={t.id} className="p-4 sm:p-5 hover:bg-gray-50">
+                    <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <p className="text-base font-semibold text-gray-900 truncate">{t.name}</p>
+                          {isArchived && (
+                            <span className="inline-flex items-center rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5 text-[11px] font-medium text-gray-600">
+                              Archived
+                            </span>
+                          )}
+                        </div>
+
+                        <p className="mt-1 text-xs text-gray-500">
+                          Created: {fmtDate(t.created_at)} • Archived: {fmtDate(t.archived_at)}
+                        </p>
+
+                        <p className="mt-1 text-[11px] text-gray-400 break-all">{t.id}</p>
                       </div>
 
-                      {n.body && <p className="mt-1 text-sm text-gray-600 break-words">{n.body}</p>}
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          onClick={() => openRename(t)}
+                          disabled={pending}
+                          className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm font-semibold text-gray-800 hover:bg-gray-50 disabled:opacity-50"
+                        >
+                          Rename
+                        </button>
 
-                      <p className="mt-2 text-xs text-gray-500">{formatDateTime(n.created_at)}</p>
+                        {!isArchived ? (
+                          <button
+                            onClick={() => doArchive(t.id)}
+                            disabled={pending}
+                            className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-800 hover:bg-amber-100 disabled:opacity-50"
+                          >
+                            Archive
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => doRestore(t.id)}
+                            disabled={pending}
+                            className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-800 hover:bg-emerald-100 disabled:opacity-50"
+                          >
+                            Restore
+                          </button>
+                        )}
+
+                        <button
+                          onClick={() => doDelete(t.id)}
+                          disabled={pending}
+                          className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm font-semibold text-red-700 hover:bg-red-100 disabled:opacity-50"
+                        >
+                          Delete
+                        </button>
+                      </div>
                     </div>
-
-                    <span
-                      className={`shrink-0 inline-flex items-center rounded-full border px-3 py-1 text-xs font-medium ${levelStyles(
-                        n.level
-                      )}`}
-                    >
-                      {n.level}
-                    </span>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         )}
       </div>
+
+      {/* Rename modal */}
+      {renamingId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-lg rounded-2xl bg-white shadow-xl border border-gray-100">
+            <div className="p-5 border-b border-gray-100 flex items-center justify-between gap-3">
+              <div>
+                <p className="text-lg font-semibold text-gray-900">Rename team</p>
+                <p className="text-sm text-gray-600">Keep it short and recognizable.</p>
+              </div>
+              <button
+                onClick={closeRename}
+                className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium hover:bg-gray-50"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="p-5 space-y-3">
+              <label className="block text-sm font-medium text-gray-700">Team name</label>
+              <input
+                value={renameValue}
+                onChange={(e) => setRenameValue(e.target.value)}
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-gray-900"
+                placeholder="e.g. Sunday Ballers"
+              />
+
+              <div className="flex flex-col sm:flex-row gap-2 sm:justify-end pt-2">
+                <button
+                  onClick={closeRename}
+                  disabled={pending}
+                  className="w-full sm:w-auto rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => doRename(renamingId)}
+                  disabled={pending}
+                  className="w-full sm:w-auto rounded-lg bg-gray-900 px-4 py-2 text-sm font-semibold text-white hover:bg-gray-800 disabled:opacity-50"
+                >
+                  {pending ? "Saving..." : "Save"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
 }
