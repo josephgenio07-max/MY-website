@@ -6,10 +6,31 @@ import { createSupabaseServerClient } from "@/lib/supabaseServer";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
+function getBaseUrl(req: Request) {
+  const envBase = (process.env.NEXT_PUBLIC_BASE_URL || "").trim().replace(/\/$/, "");
+  if (envBase) return envBase;
+
+  const origin = req.headers.get("origin");
+  if (origin) return origin.replace(/\/$/, "");
+
+  return "http://localhost:3000";
+}
 
 export async function POST(req: Request) {
   try {
+    // 0) Env sanity (prevents “crash before try/catch”)
+    const key = process.env.STRIPE_SECRET_KEY;
+    if (!key) {
+      console.error("Missing STRIPE_SECRET_KEY");
+      return NextResponse.json(
+        { error: "Server misconfigured: STRIPE_SECRET_KEY missing" },
+        { status: 500 }
+      );
+    }
+
+    const stripe = new Stripe(key);
+
+    // 1) Body
     const body = await req.json().catch(() => ({} as any));
     const teamId = String(body?.teamId ?? "").trim();
 
@@ -17,21 +38,19 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "teamId is required" }, { status: 400 });
     }
 
-    // ✅ Auth: derive manager from session cookies (NOT from request body)
+    // 2) Auth (must come from cookies/session, not client-provided ids)
     const supabase = await createSupabaseServerClient();
-    const {
-      data: { user },
-      error: userErr,
-    } = await supabase.auth.getUser();
+    const { data: userData, error: userErr } = await supabase.auth.getUser();
 
-    if (userErr || !user) {
+    if (userErr || !userData?.user) {
       return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
     }
 
+    const user = userData.user;
     const managerId = user.id;
     const managerEmail = user.email ?? undefined;
 
-    // ✅ Load team + verify ownership
+    // 3) Verify team ownership (use admin to avoid RLS surprises)
     const { data: team, error: teamErr } = await supabaseAdmin
       .from("teams")
       .select("id, manager_id, stripe_account_id")
@@ -48,12 +67,18 @@ export async function POST(req: Request) {
 
     let accountId = (team.stripe_account_id as string | null) ?? null;
 
-    // ✅ Only create a Stripe account if none exists for THIS team
+    // 4) Create connected account only if none exists
     if (!accountId) {
       const account = await stripe.accounts.create({
         type: "express",
         country: "GB",
-        email: managerEmail,
+
+        // 🔥 KEY CHANGE:
+        // If you pass email, Stripe often nudges them to SIGN IN if that email exists.
+        // If you want it to feel like “create a new account”, omit email.
+        // You can switch this back on later if you prefer prefill convenience.
+        // email: managerEmail,
+
         capabilities: {
           card_payments: { requested: true },
           transfers: { requested: true },
@@ -73,15 +98,16 @@ export async function POST(req: Request) {
         .eq("id", teamId);
 
       if (updateErr) {
-        return NextResponse.json({ error: "Failed to update team" }, { status: 500 });
+        console.error("Failed to update team with stripe_account_id:", updateErr);
+        return NextResponse.json(
+          { error: "Failed to update team", details: updateErr.message },
+          { status: 500 }
+        );
       }
     }
 
-    const base =
-      (process.env.NEXT_PUBLIC_BASE_URL || "").trim().replace(/\/$/, "") ||
-      req.headers.get("origin") ||
-      "http://localhost:3000";
-
+    // 5) Create onboarding link
+    const base = getBaseUrl(req);
     const returnUrl = `${base}/dashboard?teamId=${teamId}&connect=return`;
     const refreshUrl = `${base}/dashboard?teamId=${teamId}&connect=refresh`;
 
@@ -94,8 +120,21 @@ export async function POST(req: Request) {
 
     return NextResponse.json({ url: accountLink.url, accountId });
   } catch (err: any) {
+    console.error("STRIPE_CONNECT_CREATE_ERROR:", err);
+
+    // Stripe errors are super informative; surface safe parts in dev
+    const details =
+      err?.raw?.message ||
+      err?.message ||
+      (typeof err === "string" ? err : "Unknown error");
+
     return NextResponse.json(
-      { error: "Unexpected error", details: err?.message ?? String(err) },
+      {
+        error: "Unexpected error",
+        details,
+        type: err?.type,
+        code: err?.code,
+      },
       { status: 500 }
     );
   }
